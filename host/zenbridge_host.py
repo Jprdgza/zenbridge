@@ -95,15 +95,28 @@ def _bind_locked(path):
     return srv, (st.st_dev, st.st_ino)
 
 
+LOG_MAX_BYTES = 5 * 1024 * 1024  # then actions.jsonl -> actions.jsonl.1 (one old file kept)
+REDACTED_ARGS = ("text", "css")  # what Claude typed or injected: only the length is logged
+
+
+def redact(args):
+    return {k: (f"<{len(v)} chars>" if k in REDACTED_ARGS and isinstance(v, str) else v) for k, v in args.items()}
+
+
 class ActionLog:
-    def __init__(self, path):
+    def __init__(self, path, max_bytes=LOG_MAX_BYTES):
         ensure_private_dir(os.path.dirname(path))
-        self.fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        os.fchmod(self.fd, 0o600)
+        self.path, self.max_bytes = path, max_bytes
+        self.fd = self._open()
         self.lock = threading.Lock()
 
+    def _open(self):
+        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        os.fchmod(fd, 0o600)
+        return fd
+
     def write(self, tool, args, outcome, tab_url=None, reason=None, **extra):
-        args = args if isinstance(args, dict) else {}
+        args = redact(args) if isinstance(args, dict) else {}
         if outcome == "invalid" and len(json.dumps(args)) > 4096:
             args = {"truncated": json.dumps(args)[:4096]}  # unvalidated input: bound it
         entry = {
@@ -120,6 +133,10 @@ class ActionLog:
         # ensure_ascii: control/bidi characters are escaped, never written raw to the terminal.
         line = (json.dumps(entry) + "\n").encode("ascii")
         with self.lock:
+            if os.fstat(self.fd).st_size + len(line) > self.max_bytes:
+                os.close(self.fd)
+                os.replace(self.path, self.path + ".1")
+                self.fd = self._open()
             os.write(self.fd, line)
 
 

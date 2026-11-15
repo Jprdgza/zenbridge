@@ -10,7 +10,7 @@ const plain = (x) => JSON.parse(JSON.stringify(x, (k, v) => (Object.prototype.to
 const manifest = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"));
 
 // Default: restricted mode (goAnywhere false). Pass goAnywhere: true for the shipped config.
-function load({ grant = true, page = {}, hasPermission = true, goAnywhere = false, alwaysOn = false } = {}) {
+function load({ grant = true, page = {}, hasPermission = true, goAnywhere = false, alwaysOn = false, stored = undefined, hang = [] } = {}) {
   const calls = [];
   const on = {};
   const ev = (name) => ({ addListener: (f) => { on[name] = f; } });
@@ -22,7 +22,8 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
   const port = { posted: [], postMessage(m) { this.posted.push(m); }, onMessage: ev("message"), onDisconnect: ev("disconnect") };
   const browser = {
     browserAction: { onClicked: ev("click"), setBadgeText: async (o) => calls.push(["badge", o.tabId, o.text]),
-      setBadgeBackgroundColor: async () => {}, setTitle: async (o) => calls.push(["title", o.tabId]) },
+      setBadgeBackgroundColor: async () => {}, setBadgeTextColor: async () => {}, setTitle: async (o) => calls.push(["title", o.tabId]) },
+    storage: { local: { get: async () => ({ settings: stored }), set: async () => {} }, onChanged: ev("storage") },
     tabs: {
       onUpdated: ev("updated"), onRemoved: ev("removed"),
       get: async (id) => { if (!tabs[id]) throw new Error("no such tab"); return { ...tabs[id], id }; },
@@ -32,7 +33,7 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
       reload: async (id) => calls.push(["reload", id]),
       group: async (o) => { calls.push(["group", plain(o)]); return 7; },
       ungroup: async (id) => calls.push(["ungroup", id]),
-      captureTab: async (id, o) => { calls.push(["capture", id, plain(o)]); return o.format === "png" ? "data:image/png;base64,QUJD" : "data:image/jpeg;base64,QUJD"; },
+      captureTab: async (id, o) => { if (hang.includes("capture")) return new Promise(() => {}); calls.push(["capture", id, plain(o)]); return o.format === "png" ? "data:image/png;base64,QUJD" : "data:image/jpeg;base64,QUJD"; },
     },
     windows: { update: async () => {} },
     tabGroups: { update: async (gid, p) => calls.push(["tabGroups.update", gid, plain(p)]) },
@@ -40,19 +41,22 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
     permissions: { onAdded: ev("permAdded"), onRemoved: ev("permRemoved"), request: (p) => { calls.push(["permissions.request", plain(p.origins)]); return Promise.resolve(grant); },
       contains: async () => hasPermission, getAll: async () => ({ origins: ["<all_urls>"] }),
       remove: async (p) => { calls.push(["permissions.remove", plain(p.origins)]); } },
-    scripting: {
+    scripting: { // hang: [funcName] never resolves, like a frozen page
       insertCSS: async ({ target, css }) => { calls.push(["insertCSS", target.tabId, plain(target.frameIds), css]); },
       removeCSS: async ({ target, css }) => { calls.push(["removeCSS", target.tabId, css]); },
       executeScript: async ({ target, func, args }) => {
+      if (hang.includes(func.name)) return new Promise(() => {});
       calls.push(["exec", target.tabId, func.name, plain(target.frameIds)]);
       const r = func.name === "zbShow" && !(func.name in page) ? { ok: true } : page[func.name];
       return [{ result: typeof r === "function" ? r(args[0]) : r }];
     } },
     runtime: { getURL: (p) => `moz-extension://zb/${p}`, connectNative: (name) => { calls.push(["connectNative", name]); return port; } },
   };
-  const ctx = vm.createContext({ browser, URL, setTimeout: () => {}, console });
+  const timers = hang.length ? { setTimeout, clearTimeout } : { setTimeout: () => 0, clearTimeout: () => {} };
+  const ctx = vm.createContext({ browser, URL, ...timers, console });
   for (const f of manifest.background.scripts) {
     let src = fs.readFileSync(path.join(EXT, f), "utf8");
+    if (f === "background.js" && hang.length) src = src.replace(/15000/g, "60").replace(/ms = 8000/g, "ms = 40").replace(/, 1500\)/g, ", 20)");
     if (f === "config.js") src = src.replace(/goAnywhere: (true|false)/, `goAnywhere: ${goAnywhere}`).replace(/cursorDelayMs: \d+/, "cursorDelayMs: 0")
       .replace(/alwaysOn: (true|false)/, `alwaysOn: ${alwaysOn}`);
     vm.runInContext(src, ctx, { filename: f });
@@ -309,7 +313,7 @@ test("session from a new-tab page: no tab armed, Claude can open its own armed t
   const b = load({ goAnywhere: true });
   b.tabs[9] = { url: "about:newtab", windowId: 1 };
   await b.click(9);
-  assert.ok(b.calls.some((c) => c[0] === "update" && c[1] === 9 && c[2].url === "moz-extension://zb/start/start.html"));
+  assert.ok(b.calls.some((c) => c[0] === "update" && c[1] === 9 && c[2].url === "moz-extension://zb/pages/start.html"));
   assert.strictEqual((await b.call("tabs_list", {})).result.session, false, "not on until the start page grants");
   b.on.permAdded({ origins: ["<all_urls>"], permissions: [] });
   assert.strictEqual(b.armed().size, 0);
@@ -328,7 +332,7 @@ test("Alt+Shift+C opens the start page; clicking on a new tab again ends the ses
   const b = load({ goAnywhere: true });
   b.on.command("start-session");
   await new Promise((r) => setImmediate(r));
-  assert.ok(b.calls.some((c) => c[0] === "create" && c[1] === "moz-extension://zb/start/start.html"));
+  assert.ok(b.calls.some((c) => c[0] === "create" && c[1] === "moz-extension://zb/pages/start.html"));
   b.on.permAdded({ origins: ["<all_urls>"] });
   assert.strictEqual((await b.call("tabs_list", {})).result.session, true);
   b.tabs[9] = { url: "about:home", windowId: 1 };
@@ -359,7 +363,7 @@ test("always-on: without a prior grant, Claude stays off until you click", async
   assert.strictEqual((await b.call("tabs_list", {})).result.session, false);
   b.tabs[9] = { url: "about:newtab", windowId: 1 };
   await b.click(9);
-  assert.ok(b.calls.some((c) => c[0] === "update" && c[2].url.endsWith("start/start.html")));
+  assert.ok(b.calls.some((c) => c[0] === "update" && c[2].url.endsWith("pages/start.html")));
   b.on.permAdded({ origins: ["<all_urls>"] });
   assert.strictEqual((await b.call("tabs_list", {})).result.session, true);
   b.on.permRemoved({ origins: ["<all_urls>"] });  // e.g. switched off in the add-ons manager
@@ -420,12 +424,52 @@ test("inject_css: navigation forgets added CSS; at most 20 sheets; disarm remove
   assert.strictEqual(b.calls.slice(n).filter((c) => c[0] === "removeCSS").length, 20);
 });
 
-test("controlled tabs go into an orange 'Claude' tab group and leave it on disarm", async () => {
+test("settings from storage apply (sanitized) and change live", async () => {
+  const b = load({ stored: { goAnywhere: true, showActivity: false, hostName: "evil" } });
+  await b.call("tabs_list", {});
+  assert.strictEqual(vm.runInContext("ZB_CONFIG.goAnywhere", b.ctx), true);
+  assert.strictEqual(vm.runInContext("ZB_CONFIG.hostName", b.ctx), "zenbridge");
+  await b.click(1);
+  await b.call("scroll", { tabId: 1, dy: 1 });
+  assert.ok(!b.calls.some((c) => c[0] === "exec" && c[2] === "zbShow"), "showActivity off: no overlay");
+  b.on.storage({ settings: { newValue: { goAnywhere: false } } }, "local");
+  assert.strictEqual(vm.runInContext("ZB_CONFIG.goAnywhere", b.ctx), false);
+  b.on.storage({ settings: { newValue: { goAnywhere: true } } }, "sync");  // other areas ignored
+  assert.strictEqual(vm.runInContext("ZB_CONFIG.goAnywhere", b.ctx), false);
+});
+
+test("companion app missing: '!' badge and status; recovers when it connects", async () => {
+  const b = load();
+  assert.strictEqual(vm.runInContext("zbStatus().host", b.ctx), "connecting");
+  b.on.disconnect({ error: { message: "No such native application zenbridge" } });
+  assert.strictEqual(vm.runInContext("zbStatus().host", b.ctx), "missing");
+  assert.ok(b.calls.some((c) => c[0] === "badge" && c[1] === undefined && c[2] === "!"));
+  b.on.disconnect({ error: { message: "host exited" } });
+  assert.strictEqual(vm.runInContext("zbStatus().host", b.ctx), "disconnected");
+});
+
+test("a frozen page or a tab that won't render fails fast with TIMEOUT instead of hanging", async () => {
+  const b = load({ hang: ["zbClick", "zbShow"] });
+  await b.click(1);
+  const t0 = Date.now();
+  const r = await b.call("click", { tabId: 1, selector: "a" });
+  assert.strictEqual(r.error.code, "TIMEOUT");
+  assert.match(r.error.message, /may still happen/);
+  assert.ok(Date.now() - t0 < 2000);
+  const c = load({ hang: ["capture"], page: { zbPageMetrics: { ok: true, foreignFrames: 0, scrollX: 0, scrollY: 0, vw: 10, vh: 10, dw: 10, dh: 10 } } });
+  await c.click(1);
+  const s = await c.call("screenshot", { tabId: 1 });
+  assert.strictEqual(s.error.code, "TIMEOUT");
+  assert.match(s.error.message, /tab_switch/);
+  assert.ok(c.calls.filter((x) => x[2] === "zbShow").length === 2, "overlay restored after a failed capture");
+});
+
+test("controlled tabs go into a purple 'Claude' tab group and leave it on disarm", async () => {
   const b = load();
   await b.click(1);
   await new Promise((r) => setImmediate(r));
   assert.ok(b.calls.some((c) => c[0] === "group"));
-  assert.ok(b.calls.some((c) => c[0] === "tabGroups.update" && c[2].title === "Claude" && c[2].color === "orange"));
+  assert.ok(b.calls.some((c) => c[0] === "tabGroups.update" && c[2].title === "Claude" && c[2].color === "purple"));
   b.tabs[1].groupId = 7;
   await b.click(1);
   await new Promise((r) => setImmediate(r));

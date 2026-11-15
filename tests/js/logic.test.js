@@ -113,10 +113,33 @@ test("tab_open allowance", () => {
   assert.ok(!L.zbOpenAllowed(null, ZB_CONFIG.allowlist, scopes));
 });
 
-test("config defaults", () => {
-  assert.strictEqual(ZB_CONFIG.autoArmOpened, true);
-  assert.strictEqual(ZB_CONFIG.goAnywhere, true);
-  assert.ok(Object.isFrozen(ZB_CONFIG) && Object.isFrozen(ZB_CONFIG.allowlist));
+test("config defaults: safe for a stranger's first install", () => {
+  const { ZB_DEFAULTS, ZB_TUNABLE } = require(path.join(EXT, "config.js"));
+  assert.strictEqual(ZB_DEFAULTS.goAnywhere, false);  // go-anywhere is opt-in from the settings page
+  assert.strictEqual(ZB_DEFAULTS.autoArmOpened, true);
+  assert.ok(Object.isFrozen(ZB_DEFAULTS) && Object.isFrozen(ZB_DEFAULTS.allowlist));
+  assert.deepStrictEqual([...ZB_TUNABLE].sort(), Object.keys(ZB_DEFAULTS).sort());
+  assert.deepStrictEqual(ZB_CONFIG.allowlist, ZB_DEFAULTS.allowlist);
+});
+
+test("zbSanitizeSettings: storage is untrusted; bad values fall back to defaults", () => {
+  const { ZB_DEFAULTS, ZB_TUNABLE } = require(path.join(EXT, "config.js"));
+  const s = (raw) => L.zbSanitizeSettings(raw, ZB_DEFAULTS, ZB_TUNABLE);
+  const d = s(undefined);
+  assert.deepStrictEqual(d, { ...ZB_DEFAULTS, allowlist: [...ZB_DEFAULTS.allowlist] });
+  for (const raw of [null, 5, "x", [], { goAnywhere: "true" }, { cursorDelayMs: -1 }, { cursorDelayMs: 1.5 }, { cursorDelayMs: 5000 },
+                     { allowlist: "http://localhost:*" }, { allowlist: { 0: "http://evil" } }, { hostName: "evil" }]) {
+    const out = s(raw);
+    assert.deepStrictEqual(out, d, JSON.stringify(raw));
+    assert.ok(!("hostName" in out));
+  }
+  // bad entries are dropped one by one; the good ones stay
+  assert.deepStrictEqual(s({ allowlist: ["javascript:alert(1)", "http://localhost:*", "http://a/b", "*", 5, "x".repeat(300)] }).allowlist,
+    ["http://localhost:*"]);
+  assert.strictEqual(s({ allowlist: new Array(30).fill("http://localhost:*") }).allowlist.length, 20);
+  assert.deepStrictEqual(s({ allowlist: [] }).allowlist, []);
+  assert.deepStrictEqual(s({ goAnywhere: true, cursorDelayMs: 0, allowlist: ["https://My.Dev:8443", "http://[::1]:*"] }),
+    { ...d, goAnywhere: true, cursorDelayMs: 0, allowlist: ["https://my.dev:8443", "http://[::1]:*"] });
 });
 
 function pageContext(el, origin) {

@@ -19,6 +19,30 @@ const TITLES = {
 };
 const ignore = () => {};
 let session = false;  // a session lets Claude open its own tabs without any armed page
+let hostStatus = "connecting";  // "connected" | "missing" (companion app not installed) | "disconnected"
+
+// Settings from the settings page; sanitized, since storage is just data.
+function applySettings(raw) { Object.assign(ZB_CONFIG, zbSanitizeSettings(raw, ZB_DEFAULTS, ZB_TUNABLE)); }
+const settingsReady = browser.storage.local.get("settings").then((r) => applySettings(r.settings), () => applySettings(undefined));
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.settings) applySettings(changes.settings.newValue);
+});
+
+// Read by the start and settings pages through runtime.getBackgroundPage().
+function zbStatus() {
+  return { host: hostStatus, session, armedTabs: armed.size, setupUrl: ZB_SETUP_URL };
+}
+
+// The toolbar badge without a tab-specific one: "!" if the companion app is missing, "AI" when Claude is on.
+function setGlobalBadge() {
+  const missing = hostStatus === "missing";
+  browser.browserAction.setBadgeText({ text: missing ? "!" : session ? "AI" : "" }).catch(ignore);
+  browser.browserAction.setBadgeBackgroundColor({ color: missing ? ZB_COLORS.warn : ZB_COLORS.accent }).catch(ignore);
+  if (browser.browserAction.setBadgeTextColor) browser.browserAction.setBadgeTextColor({ color: ZB_COLORS.crust }).catch(ignore);
+  browser.browserAction.setTitle({ title: missing ? "zenbridge: the companion app is not installed - open the add-on's settings for setup"
+    : session ? "zenbridge: Claude is ON - click a page to hand it to Claude (Alt+Shift+K turns Claude off)"
+      : "zenbridge: click to arm this tab, or click on a new tab / Alt+Shift+C to turn Claude on" }).catch(ignore);
+}
 
 function setBadge(tabId, url) {
   const b = zbBadge(armed.get(tabId), url);
@@ -26,6 +50,7 @@ function setBadge(tabId, url) {
   browser.browserAction.setBadgeText({ tabId, text: b.text || null }).catch(ignore);
   browser.browserAction.setTitle({ tabId, title: b.text ? TITLES[b.text] : null }).catch(ignore);
   if (b.color) browser.browserAction.setBadgeBackgroundColor({ tabId, color: b.color }).catch(ignore);
+  if (b.color && browser.browserAction.setBadgeTextColor) browser.browserAction.setBadgeTextColor({ tabId, color: ZB_COLORS.crust }).catch(ignore);
 }
 
 // With nothing armed and no session, drop every optional host grant (incl. <all_urls>).
@@ -38,16 +63,13 @@ function releaseIfIdle() {
 
 function setSession(on) {
   session = on;
-  browser.browserAction.setBadgeText({ text: on ? "AI" : "" }).catch(ignore);
-  browser.browserAction.setBadgeBackgroundColor({ color: "#d97757" }).catch(ignore);
-  browser.browserAction.setTitle({ title: on ? "zenbridge: Claude is ON - click a page to hand it to Claude (Alt+Shift+K turns Claude off)"
-    : "zenbridge: click to arm this tab, or click on a new tab / Alt+Shift+C to start a Claude session" }).catch(ignore);
+  setGlobalBadge();
   releaseIfIdle();
 }
 
 // Zen can't show a permission prompt on its new-tab page, so starting a session goes through
-// an extension page with its own "Turn Claude on" button (start/start.html).
-const START_URL = browser.runtime.getURL("start/start.html");
+// an extension page with its own "Turn Claude on" button (pages/start.html).
+const START_URL = browser.runtime.getURL("pages/start.html");
 let startPending = false;  // a grant only starts a session if you asked for one (or in always-on mode)
 function startSession(tabId) {
   startPending = true;
@@ -69,7 +91,7 @@ function endAll() {
   setSession(false);
 }
 
-// Orange "Claude" tab group for controlled tabs; silently skipped where tab groups are unsupported.
+// Purple (Catppuccin-ish) "Claude" tab group for controlled tabs; silently skipped where tab groups are unsupported.
 const claudeGroups = new Map();  // windowId -> groupId
 async function setGrouped(tabId, on) {
   if (!ZB_CONFIG.tabGroup || typeof browser.tabs.group !== "function") return;
@@ -85,7 +107,7 @@ async function setGrouped(tabId, on) {
     try { gid = await browser.tabs.group(existing === undefined ? { tabIds: tabId } : { tabIds: tabId, groupId: existing }); }
     catch (e) { gid = await browser.tabs.group({ tabIds: tabId }); }  // old group was closed
     claudeGroups.set(tab.windowId, gid);
-    if (browser.tabGroups) await browser.tabGroups.update(gid, { title: "Claude", color: "orange" });
+    if (browser.tabGroups) await browser.tabGroups.update(gid, { title: "Claude", color: "purple" });
   } catch (e) { /* unsupported or tab gone: the badge still shows control */ }
 }
 
@@ -135,8 +157,10 @@ browser.commands.onCommand.addListener((name) => {
 });
 // Armed tabs never survive a restart. In always-on mode the session does, if you granted it before
 // (Firefox keeps the grant); Alt+Shift+K revokes the grant, so Claude stays off until you click again.
-if (ZB_CONFIG.alwaysOn) browser.permissions.contains({ origins: ["<all_urls>"] }).then(setSession, () => setSession(false));
-else setSession(false);
+settingsReady.then(() => {
+  if (ZB_CONFIG.alwaysOn) return browser.permissions.contains({ origins: ["<all_urls>"] }).then(setSession, () => setSession(false));
+  setSession(false);
+});
 
 // ------------------------------------------------------------- choke point
 async function resolveArmedTab(tabId) {
@@ -151,8 +175,18 @@ async function resolveArmedTab(tabId) {
   return { tab, scope, origin, url: tab.url };
 }
 
-async function inject(ctx, func, arg) {
-  const results = await browser.scripting.executeScript({ target: { tabId: ctx.tab.id, frameIds: [0] }, func, args: [arg, ctx.origin] });
+// A busy page or a window that isn't drawing (minimized, hidden workspace) can stall the browser APIs.
+// Answer with a clear error well before the host's own timeout instead of hanging.
+function withTimeout(promise, ms, message, ctx) {
+  let timer;
+  const t = new Promise((_, reject) => { timer = setTimeout(() => reject(new ZbError("TIMEOUT", message, ctx && ctx.url)), ms); });
+  return Promise.race([promise, t]).finally(() => clearTimeout(timer));
+}
+
+async function inject(ctx, func, arg, ms = 8000) {
+  const results = await withTimeout(
+    browser.scripting.executeScript({ target: { tabId: ctx.tab.id, frameIds: [0] }, func, args: [arg, ctx.origin] }),
+    ms, "the page did not respond in time (busy or frozen); the action may still happen", ctx);
   const r = results && results[0];
   if (!r || r.error || !r.result || typeof r.result !== "object") throw new ZbError("INTERNAL", "page script failed", ctx.url);
   if (r.result.ok !== true) {
@@ -165,7 +199,7 @@ async function inject(ctx, func, arg) {
 // Visual cue in the page before an action; never blocks or fails the action itself.
 async function cue(ctx, arg, pause) {
   if (!ZB_CONFIG.showActivity) return;
-  try { await inject(ctx, zbShow, arg); } catch (e) { return; }
+  try { await inject(ctx, zbShow, arg, 1500); } catch (e) { return; }
   if (pause && ZB_CONFIG.cursorDelayMs > 0) await new Promise((r) => setTimeout(r, ZB_CONFIG.cursorDelayMs));
 }
 
@@ -244,7 +278,10 @@ const TOOLS = {
       : { format: "png", scale: 1 };  // scale is device px per CSS px: 1 => image px == CSS px
     await cue(ctx, { hide: true });  // keep the overlay out of the image
     let dataUrl;
-    try { dataUrl = await browser.tabs.captureTab(ctx.tab.id, opts); } finally { await cue(ctx, { kind: "glow" }); }
+    try {
+      dataUrl = await withTimeout(browser.tabs.captureTab(ctx.tab.id, opts), 15000,
+        "the tab did not render in time (is the window minimized or the tab in another workspace?); try tab_switch, then screenshot again", ctx);
+    } finally { await cue(ctx, { kind: "glow" }); }
     await resolveArmedTab(ctx.tab.id);  // tab may have navigated out of scope during capture
     const mime = a.fullPage ? "image/jpeg" : "image/png";
     const prefix = `data:${mime};base64,`;
@@ -296,6 +333,7 @@ const TOOLS = {
 
 // validate -> resolve tab -> check armed -> check scope -> perform -> validate result -> return
 async function handleRequest(msg) {
+  await settingsReady;
   const id = msg && typeof msg.id === "string" && /^[0-9a-f]{16,64}$/.test(msg.id) ? msg.id : NO_ID;
   const fail = (code, message, tabUrl) => {
     const out = { v: 1, id, ok: false, error: { code, message: String(message).slice(0, 500) } };
@@ -331,12 +369,17 @@ let connectedAt = 0;
 function connect() {
   connectedAt = Date.now();
   port = browser.runtime.connectNative(ZB_CONFIG.hostName);
+  const p = port;
+  setTimeout(() => { if (port === p && hostStatus !== "connected") { hostStatus = "connected"; setGlobalBadge(); } }, 3000);
   port.onMessage.addListener(async (msg) => {
     const p = port;
     const resp = await handleRequest(msg);
     if (p === port && p) p.postMessage(resp);
   });
-  port.onDisconnect.addListener(() => {
+  port.onDisconnect.addListener((dp) => {
+    const why = String((dp && dp.error && dp.error.message) || "");
+    hostStatus = /no such native application|not found|manifest/i.test(why) ? "missing" : "disconnected";
+    setGlobalBadge();
     port = null;
     if (Date.now() - connectedAt > 10000) backoffMs = 1000;
     setTimeout(connect, backoffMs);

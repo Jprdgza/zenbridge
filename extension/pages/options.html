@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zenbridge settings</title>
+<link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<main>
+  <h1>zenbridge settings</h1>
+  <div class="card">Companion app: <span id="host" class="status">checking...</span>
+    <a id="setup" hidden target="_blank" rel="noopener">How to install it</a></div>
+
+  <h2>What Claude can do</h2>
+  <form id="form">
+    <label class="row"><input type="checkbox" name="goAnywhere">
+      <span>Go anywhere<small>In tabs Claude opened or you handed it, Claude can visit any website without asking.
+        When off, it stays on the sites you hand it plus the local addresses below. Applies to tabs armed after the change.</small></span></label>
+    <label class="row"><input type="checkbox" name="alwaysOn">
+      <span>Stay on across restarts<small>After you turn Claude on once, it stays on until you press Alt+Shift+K.</small></span></label>
+    <label class="row"><input type="checkbox" name="autoArmOpened">
+      <span>Let Claude use tabs it opens<small>Tabs Claude opens are handed to it automatically (only on sites already allowed).</small></span></label>
+
+    <h2>What you see</h2>
+    <label class="row"><input type="checkbox" name="showActivity">
+      <span>Show activity<small>Glow, cursor and highlight while Claude works in a tab.</small></span></label>
+    <label class="row"><input type="checkbox" name="tabGroup">
+      <span>Group Claude's tabs<small>Keep tabs Claude controls in a "Claude" tab group.</small></span></label>
+    <label class="row"><span style="flex:1">Cursor pause (ms, 0-1000)<small>How long the cursor rests on its target before acting.</small>
+      <input type="number" name="cursorDelayMs" min="0" max="1000" step="50"></span></label>
+
+    <h2>Always-allowed local addresses</h2>
+    <p>One per line, like <code>http://localhost:*</code> (<code>:*</code> means any port).</p>
+    <textarea name="allowlist" rows="4" spellcheck="false"></textarea>
+  </form>
+  <p><button id="reset" type="button">Reset to defaults</button> <span id="saved" role="status"></span></p>
+  <footer>zenbridge is an unofficial, community project. It is not made by or affiliated with Anthropic.
+    Every action is logged on your computer only (macOS: ~/Library/Logs/zenbridge). Typed text is not logged.</footer>
+</main>
+<script src="../config.js"></script>
+<script src="../logic.js"></script>
+<script src="ui.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

@@ -1,11 +1,14 @@
 # zenbridge
 
 Let [Claude Code](https://claude.com/claude-code) drive your real, logged-in
-[Zen Browser](https://zen-browser.app) (or Firefox): open tabs, read pages,
-click, type, scroll and take screenshots.
+[Zen Browser](https://zen-browser.app) or Firefox: open tabs, read pages,
+click, type, scroll, restyle pages and take screenshots.
 
-There's no network server. The extension talks to a small Python process over
-Firefox native messaging, and that process talks to the MCP server over a
+> **Unofficial.** zenbridge is a community project. It is not made by, endorsed
+> by or affiliated with Anthropic or the Zen Browser team.
+
+There's no network server. The extension talks to a small Python companion app
+over Firefox native messaging, and that app talks to the MCP server over a
 same-user unix socket. Everything is Python stdlib and plain JS, with no
 dependencies.
 
@@ -33,65 +36,102 @@ storage, read form values, type into password, one-time-code and card fields,
 or inject CSS that loads anything (`url()`, `@import`, ...), since that could leak
 page data.
 
-While Claude works in a tab you'll see an orange glow, a "Claude is working in
-this tab" label, and a cursor that moves to whatever it clicks, types into or
-scrolls. Its tabs are kept in an orange **Claude** tab group.
+While Claude works in a tab you'll see a soft purple glow, a "Claude is working
+in this tab" label, and a cursor that moves to whatever it clicks, types into
+or scrolls (colors from [Catppuccin](https://catppuccin.com)). Its tabs are
+kept in a **Claude** tab group.
 
 ## Install
 
-Requirements: macOS (Linux paths are included but untested), Zen or Firefox
-140+, Python 3.10+, and Claude Code.
+Requirements:
 
-1. **Sign the extension.** Firefox only installs signed add-ons, so sign it as
-   an unlisted add-on with your own [AMO API key](https://addons.mozilla.org/developers/addon/api/key/).
-   The add-on ID is tied to whoever signs it first, so if you're not me, change
-   `zenbridge@jprdgza.github.io` to your own ID in `extension/manifest.json`,
+- macOS or Linux (Linux is untested; Windows isn't supported yet)
+- Zen or Firefox 140+
+- Python 3.10+ (the `python3` that ships with macOS is 3.9; `brew install python` works)
+- Claude Code
+
+1. **Install the add-on** from addons.mozilla.org, or build your own: sign it
+   as an unlisted add-on with your own [AMO API key](https://addons.mozilla.org/developers/addon/api/key/).
+   An add-on ID belongs to whoever signs it first, so for your own build change
+   `zenbridge@jprdgza.github.io` in `extension/manifest.json`,
    `host/zenbridge_host.py`, `install.sh`, `uninstall.sh` and `tests/`.
 
    ```bash
    WEB_EXT_API_KEY='user:...' WEB_EXT_API_SECRET='...' npx web-ext@8 sign --channel=unlisted --source-dir extension --artifacts-dir web-ext-artifacts
    ```
 
-   Then open `web-ext-artifacts/*.xpi` in Zen and click **Add**.
-
-2. **Install the native host and register the MCP server.**
+2. **Install the companion app and register the MCP server.**
 
    ```bash
-   ./install.sh
+   git clone https://github.com/Jprdgza/zenbridge.git
    ```
 
-   This writes the native messaging manifest for Mozilla and Zen, pins your
+   ```bash
+   cd zenbridge && ./install.sh
+   ```
+
+   This writes the native messaging manifest for Firefox and Zen, pins your
    `python3` in `host/launcher.sh` (override with `PYTHON=/path/to/python3`),
    and runs `claude mcp add --scope user zenbridge ...`.
 
-3. **Restart Zen**, then run `/mcp` in Claude Code to check that `zenbridge` is
-   connected.
+3. **Restart the browser.** The add-on's settings page shows "Companion app:
+   connected" once everything is in place, and the toolbar button shows a
+   yellow **!** if the app is missing. In Claude Code, `/mcp` should list
+   `zenbridge`.
 
 ## Using it
 
 - **Turn Claude on:** click the zenbridge toolbar button on a new tab (or press
   **Alt+Shift+C**), then click **Turn Claude on** and allow the prompt. The
-  button gets an orange **AI** badge. Claude stays on across restarts.
-- **Hand Claude one of your tabs:** click the toolbar button on that tab (red
-  **ON** badge). Click again to take it back. Handed-over tabs reset when the
-  browser restarts.
+  button gets an **AI** badge, and Claude can open and drive its own tabs.
+- **Hand Claude one of your tabs:** click the toolbar button on that tab (**ON**
+  badge). Click again to take it back. Handed-over tabs reset when the browser
+  restarts.
 - **Turn everything off:** **Alt+Shift+K**. This releases every tab and revokes
   the permission, so Claude stays off until you turn it on again.
 
-Settings live in `extension/config.js` (no settings UI): `alwaysOn`,
-`goAnywhere` (off restricts Claude to localhost plus sites you hand it),
-`showActivity`, `tabGroup`, `cursorDelayMs`. Bump the version in
-`manifest.json` and re-sign after changing them.
+### Settings
+
+Open the add-on's settings (`about:addons` → zenbridge → Preferences, or the
+link on the Turn Claude on page):
+
+| Setting | Default | |
+|---|---|---|
+| Go anywhere | off | Let Claude visit any site in its tabs. When off, it stays on sites you hand it plus the local addresses. |
+| Stay on across restarts | on | After you turn Claude on once, it stays on until Alt+Shift+K. |
+| Let Claude use tabs it opens | on | Tabs Claude opens are handed to it automatically, on allowed sites only. |
+| Show activity | on | Glow, cursor and highlight while Claude works. |
+| Group Claude's tabs | on | Keep Claude's tabs in a "Claude" tab group. |
+| Cursor pause | 200 ms | How long the cursor rests on its target before acting. |
+| Local addresses | localhost, 127.0.0.1, [::1] | Always allowed, any port. |
+
+## Privacy
+
+- The extension sends nothing over the network itself. Page text, screenshots
+  and URLs of the tabs you hand Claude go to the companion app on your computer
+  and from there to Claude Code, which sends them to Anthropic as part of your
+  conversation. That's why the add-on declares website content and browsing
+  activity at install time.
+- Every action is logged locally to `~/Library/Logs/zenbridge/actions.jsonl`
+  (`~/.local/state/zenbridge/` on Linux): time, tool, tab, URL and outcome.
+  Text Claude types and CSS it injects are recorded only as a length, and
+  screenshots are never logged. The log rotates at 5 MB, keeping one old file.
+
+```bash
+tail -f ~/Library/Logs/zenbridge/actions.jsonl
+```
 
 ## Security notes
 
 - Nothing listens on a network port. The socket lives in a `0700` directory,
-  is `0600`, and the host checks that the connecting process belongs to you.
+  is `0600`, and the companion app checks that the connecting process belongs
+  to you.
 - The extension has no content scripts and no message listeners, so web pages
   have nothing to talk to. Page actions are a fixed set of functions injected
   into allowed tabs only, and each one re-checks the page's origin before acting.
-- Every message is validated against `schema/tools.json`, in Python on the host
-  and server and in JS in the extension.
+- Every message is validated against `schema/tools.json`, in Python in the
+  companion app and server and in JS in the extension. Settings are re-checked
+  every time they're read.
 - Page text, titles and screenshots are wrapped in "untrusted content" markers,
   but prompt injection from web pages is still a real risk. Don't hand Claude
   tabs it doesn't need, especially logged-in ones.
@@ -99,25 +139,19 @@ Settings live in `extension/config.js` (no settings UI): `alwaysOn`,
   can drive Claude's tabs. zenbridge doesn't protect you from malware running
   as you.
 
-## Action log
-
-Every action is appended to `~/Library/Logs/zenbridge/actions.jsonl`, one
-JSON object per line with the time, tool, tab, URL, arguments and outcome.
-Screenshot data is never logged.
-
-```bash
-tail -f ~/Library/Logs/zenbridge/actions.jsonl
-```
-
 ## Limitations
 
 - Clicks and key presses are synthetic (`isTrusted=false`), so sites that
-  check for that (CAPTCHAs, some payment and login widgets) will ignore them.
-  Rich editors like Google Docs may not accept typed text.
+  check for that (CAPTCHAs, some payment and login widgets) ignore them. Chrome
+  extensions can work around this with a debugger API that Firefox doesn't
+  offer. Rich editors like Google Docs may not accept typed text.
 - Only the top frame can be clicked or typed into, not iframes.
-- In restricted mode, screenshots are refused when cross-origin iframes are
+- A tab in a minimized window or another workspace may not render for a
+  screenshot; switch to it and try again.
+- With go-anywhere off, screenshots are refused when cross-origin iframes are
   visible.
 - File pickers, native `<select>` popups and OS dialogs can't be driven.
+- Several Claude Code sessions can share the browser, but they take turns.
 
 ## Development
 

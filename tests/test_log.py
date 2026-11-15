@@ -86,6 +86,32 @@ class LogTest(unittest.TestCase):
         self.assertEqual(a["openedTabId"], 42)
         self.assertLess(len(json.dumps(b)), 6000)
 
+    def test_typed_text_and_css_are_not_logged(self):
+        log = zh.ActionLog(self.path)
+        self.addCleanup(lambda: os.close(log.fd))
+        log.write("type", {"tabId": 1, "text": "my secret message", "key": "Enter"}, "ok")
+        log.write("inject_css", {"tabId": 1, "css": "body{color:red}"}, "ok")
+        log.write("type", {"tabId": 1, "text": "x" * 9000}, "invalid")
+        with open(self.path) as f:
+            raw = f.read()
+        self.assertNotIn("secret", raw)
+        self.assertNotIn("color:red", raw)
+        a, b, c = self.lines()
+        self.assertEqual(a["args"], {"tabId": 1, "text": "<17 chars>", "key": "Enter"})
+        self.assertEqual(b["args"]["css"], "<15 chars>")
+        self.assertEqual(c["args"]["text"], "<9000 chars>")
+
+    def test_log_rotates_at_the_size_cap(self):
+        log = zh.ActionLog(self.path, max_bytes=2000)
+        self.addCleanup(lambda: os.close(log.fd))
+        for i in range(40):
+            log.write("scroll", {"tabId": i, "dy": 1}, "ok")
+        self.assertLessEqual(os.path.getsize(self.path), 2000)
+        self.assertLessEqual(os.path.getsize(self.path + ".1"), 2000)
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
+        self.assertEqual(self.lines()[-1]["tabId"], 39)
+        self.assertTrue(fcntl.fcntl(log.fd, fcntl.F_GETFL) & os.O_APPEND)
+
     def test_symlinked_log_refused(self):
         os.makedirs(os.path.dirname(self.path), mode=0o700)
         os.symlink("/tmp/zb-not-here", self.path)

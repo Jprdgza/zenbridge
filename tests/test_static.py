@@ -48,7 +48,7 @@ class NetworkGuards(unittest.TestCase):
     FORBIDDEN_JS = [r"\beval\(", r"new Function", r"\bfetch\(", r"XMLHttpRequest", r"WebSocket", r"\.innerHTML\s*=",
                     r"outerHTML\s*=", r"insertAdjacentHTML", r"document\.write", r"runtime\.onMessage",
                     r"runtime\.sendMessage", r"onMessageExternal", r"setTimeout\(\s*[\"'`]", r"setInterval\(",
-                    r"tabs\.executeScript", r"contentScripts", r"\bstorage\.", r"cookies", r"\bimportScripts\b",
+                    r"tabs\.executeScript", r"contentScripts", r"\bstorage\.sync", r"storage\.session", r"cookies", r"\bimportScripts\b",
                     r"EventSource", r"sendBeacon", r"RTCPeerConnection"]
 
     def test_extension_forbidden(self):
@@ -86,12 +86,12 @@ class ManifestGuards(unittest.TestCase):
         self.doc = read("extension/manifest.README.md")
 
     def test_exact_permissions(self):
-        self.assertEqual(self.m["permissions"], ["nativeMessaging", "scripting", "activeTab", "tabGroups"])
+        self.assertEqual(self.m["permissions"], ["nativeMessaging", "scripting", "activeTab", "tabGroups", "storage"])
         self.assertEqual(self.m["optional_permissions"], ["http://*/*", "https://*/*", "<all_urls>"])
         self.assertEqual(self.m["manifest_version"], 2)
         self.assertTrue(self.m["background"]["persistent"])
         for key in ("content_scripts", "web_accessible_resources", "externally_connectable", "host_permissions",
-                    "options_ui", "sidebar_action", "page_action"):
+                    "sidebar_action", "page_action"):
             self.assertNotIn(key, self.m)
         self.assertNotIn("default_popup", self.m["browser_action"])
         self.assertEqual(self.m["commands"]["disarm-all"]["suggested_key"]["default"], "Alt+Shift+K")
@@ -109,13 +109,36 @@ class ManifestGuards(unittest.TestCase):
         on_disk = {f for f in os.listdir(EXT) if f.endswith(".js")}
         self.assertEqual(set(scripts), on_disk)
 
-    def test_start_page_only_requests_permission(self):
-        src = code_only(read("extension/start/start.js"))
-        self.assertEqual(re.findall(r"\bbrowser\.[\w.]+", src), ["browser.permissions.request"])
-        for pat in NetworkGuards.FORBIDDEN_JS:
-            self.assertIsNone(re.search(pat, src), pat)
-        self.assertEqual(sorted(os.listdir(os.path.join(EXT, "start"))), ["start.html", "start.js"])
-        self.assertNotRegex(read("extension/start/start.html"), r"<script>|on\w+=|https?://")
+    def test_pages_use_only_what_they_need(self):
+        pages = os.path.join(EXT, "pages")
+        self.assertEqual(sorted(os.listdir(pages)),
+                         ["options.html", "options.js", "start.html", "start.js", "theme.css", "ui.js"])
+        allowed = {
+            "start.js": {"browser.permissions.request"},
+            "ui.js": {"browser.runtime.getBackgroundPage", "browser.runtime.openOptionsPage"},
+            "options.js": {"browser.storage.local.get", "browser.storage.local.set", "browser.storage.local.remove"},
+        }
+        for name, apis in allowed.items():
+            src = code_only(read(f"extension/pages/{name}"))
+            self.assertEqual(set(re.findall(r"\bbrowser\.[\w.]+", src)), apis, name)
+            for pat in NetworkGuards.FORBIDDEN_JS:
+                self.assertIsNone(re.search(pat, src), f"{name}: {pat}")
+        for name in ("start.html", "options.html"):
+            html = read(f"extension/pages/{name}")
+            self.assertNotRegex(html, r"<script>|<script [^>]*>[^<]|\son\w+=|(src|href)=\"https?://", name)  # no inline JS, no remote URLs
+            self.assertIn("not made by or affiliated with Anthropic", html)
+        self.assertEqual(self.m["options_ui"], {"page": "pages/options.html", "open_in_tab": True})
+
+    def test_storage_holds_only_settings(self):
+        for rel in ("extension/background.js", "extension/pages/options.js"):
+            for m in re.finditer(r"storage\.local\.(get|set|remove)\(([^)]*)\)", read(rel)):
+                self.assertRegex(m.group(2), r'^\s*(\{\s*settings: s\s*\}|"settings")\s*$', f"{rel}: {m.group(0)}")
+        self.assertIn("zbSanitizeSettings(raw, ZB_DEFAULTS, ZB_TUNABLE)", read("extension/background.js"))
+
+    def test_data_collection_declared(self):
+        dc = self.m["browser_specific_settings"]["gecko"]["data_collection_permissions"]
+        self.assertEqual(dc, {"required": ["websiteContent", "browsingActivity"]})
+        self.assertIn("Not affiliated with Anthropic", self.m["description"])
 
     def test_extension_id_consistent(self):
         self.assertEqual(self.m["browser_specific_settings"]["gecko"]["id"], EXT_ID)

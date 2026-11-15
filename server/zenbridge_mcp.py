@@ -129,7 +129,7 @@ def handle(msg, bridge):
         asked = params.get("protocolVersion")
         version = asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
         return ok({"protocolVersion": version, "capabilities": {"tools": {}},
-                   "serverInfo": {"name": "zenbridge", "version": "1.3.0"}})
+                   "serverInfo": {"name": "zenbridge", "version": "1.4.0"}})
     if method == "ping":
         return ok({})
     if method == "tools/list":

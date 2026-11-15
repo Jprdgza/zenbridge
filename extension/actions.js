@@ -131,13 +131,13 @@ function zbReadText(a, expectedOrigin) {
   return { ok: true, title: String(document.title), text: raw.slice(0, a.maxChars), truncated: raw.length > a.maxChars, links };
 }
 
-// Visual activity cue: orange glow around the viewport, a "Claude is working" pill, an orange
-// cursor that glides to the target, and a highlight box around the element being used.
+// Visual activity cue (Catppuccin Mocha mauve): a glow around the viewport, a "Claude is working"
+// pill, a cursor that glides to the target, and a highlight box around the element being used.
 // Purely visual: pointer-events none, closed shadow root, CSSOM styles only (no innerHTML).
 // a = {hide:true} (before screenshots) | {kind:"glow"|"click"|"type"|"scroll", selector?, x?, y?}
 function zbShow(a, expectedOrigin) {
   if (location.origin !== expectedOrigin) return { ok: true };
-  const ORANGE = "#d97757";
+  const ACCENT = "#cba6f7", CRUST = "#11111b", RGB = "203,166,247";  // Catppuccin Mocha mauve / crust
   let o = globalThis.__zbOverlay;
   if (!o || !o.host.isConnected) {
     const stale = document.getElementById("zenbridge-overlay");
@@ -152,13 +152,13 @@ function zbShow(a, expectedOrigin) {
       root.appendChild(d);
       return d;
     };
-    const glow = layer({ inset: "0", "box-shadow": `inset 0 0 0 3px ${ORANGE}, inset 0 0 36px 10px rgba(217,119,87,0.45)` });
-    const pill = layer({ top: "12px", left: "50%", transform: "translateX(-50%)", background: ORANGE, color: "#fff",
+    const glow = layer({ inset: "0", "box-shadow": `inset 0 0 0 3px ${ACCENT}, inset 0 0 36px 10px rgba(${RGB},0.45)` });
+    const pill = layer({ top: "12px", left: "50%", transform: "translateX(-50%)", background: ACCENT, color: CRUST,
       padding: "6px 12px", "border-radius": "999px", font: "600 12px/1.2 -apple-system, BlinkMacSystemFont, sans-serif",
       "box-shadow": "0 2px 10px rgba(0,0,0,0.3)", "white-space": "nowrap" });
     pill.textContent = "Claude is working in this tab";
-    const box = layer({ border: `2px solid ${ORANGE}`, "border-radius": "6px",
-      "box-shadow": "0 0 0 4px rgba(217,119,87,0.25), 0 0 18px rgba(217,119,87,0.7)",
+    const box = layer({ border: `2px solid ${ACCENT}`, "border-radius": "6px",
+      "box-shadow": `0 0 0 4px rgba(${RGB},0.25), 0 0 18px rgba(${RGB},0.7)`,
       transition: "opacity 250ms, left 150ms, top 150ms, width 150ms, height 150ms" });
     const cursor = layer({ left: `${window.innerWidth / 2}px`, top: `${window.innerHeight / 2}px`, width: "24px", height: "24px",
       transition: "opacity 250ms, left 180ms cubic-bezier(.2,.8,.2,1), top 180ms cubic-bezier(.2,.8,.2,1)",
@@ -167,7 +167,7 @@ function zbShow(a, expectedOrigin) {
     const svg = document.createElementNS(NS, "svg");
     const path = document.createElementNS(NS, "path");
     for (const [k, v] of [["viewBox", "0 0 24 24"], ["width", "24"], ["height", "24"]]) svg.setAttribute(k, v);
-    for (const [k, v] of [["d", "M3 2l7 19 2.6-7.4L20 11z"], ["fill", ORANGE], ["stroke", "#fff"], ["stroke-width", "1.5"], ["stroke-linejoin", "round"]]) path.setAttribute(k, v);
+    for (const [k, v] of [["d", "M3 2l7 19 2.6-7.4L20 11z"], ["fill", ACCENT], ["stroke", CRUST], ["stroke-width", "1.5"], ["stroke-linejoin", "round"]]) path.setAttribute(k, v);
     svg.appendChild(path);
     cursor.appendChild(svg);
     document.documentElement.appendChild(host);
@@ -201,7 +201,7 @@ function zbShow(a, expectedOrigin) {
       setTimeout(() => {
         const ring = document.createElement("div");
         const css = { position: "fixed", left: `${x - 14}px`, top: `${y - 14}px`, width: "28px", height: "28px",
-          border: `3px solid ${ORANGE}`, "border-radius": "50%", "pointer-events": "none", "box-sizing": "border-box" };
+          border: `3px solid ${ACCENT}`, "border-radius": "50%", "pointer-events": "none", "box-sizing": "border-box" };
         for (const [k, v] of Object.entries(css)) ring.style.setProperty(k, v);
         o.root.appendChild(ring);
         ring.animate([{ transform: "scale(0.4)", opacity: 1 }, { transform: "scale(1.8)", opacity: 0 }], { duration: 400, easing: "ease-out" })

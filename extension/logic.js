@@ -69,7 +69,8 @@ function zbArmDecision(scope, origin, shift) {
 
 function zbBadge(scope, url) {
   if (!scope) return { text: "", color: null };
-  return zbInScope(scope, zbOriginOf(url)) ? { text: "ON", color: "#d70022" } : { text: "!!", color: "#ffa436" };
+  // Catppuccin Mocha red / yellow
+  return zbInScope(scope, zbOriginOf(url)) ? { text: "ON", color: "#f38ba8" } : { text: "!!", color: "#f9e2af" };
 }
 
 // Typing is refused into password, one-time-code and credit-card fields (also when a
@@ -94,6 +95,26 @@ function zbCssProblem(css) {
   return null;
 }
 
+// Settings come from browser storage, so treat them as untrusted: every key is type-checked
+// against the defaults and anything odd falls back to the default value.
+const ZB_ALLOW_ENTRY = /^https?:\/\/(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(:\*|:\d{1,5})?$/i;
+function zbSanitizeSettings(raw, defaults, tunable) {
+  const out = {};
+  const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  for (const k of tunable) {
+    const d = defaults[k], v = Object.hasOwn(src, k) ? src[k] : undefined;
+    if (typeof d === "boolean") out[k] = typeof v === "boolean" ? v : d;
+    else if (k === "cursorDelayMs") out[k] = Number.isInteger(v) && v >= 0 && v <= 1000 ? v : d;
+    else if (k === "allowlist") {
+      // Keep the valid entries, drop the rest (one typo shouldn't wipe the whole list).
+      out[k] = Array.isArray(v)
+        ? v.filter((e) => typeof e === "string" && e.length <= 200 && ZB_ALLOW_ENTRY.test(e)).slice(0, 20).map((e) => e.toLowerCase())
+        : [...d];
+    }
+  }
+  return out;
+}
+
 // Scope given to a newly armed tab.
 function zbNewScope(origin, config) {
   return new Set(config.goAnywhere ? ["*"] : [origin, ...config.allowlist]);
@@ -109,5 +130,5 @@ function zbOpenAllowed(origin, allowlist, scopes) {
 
 if (typeof module !== "undefined") {
   module.exports = { zbOriginOf, zbArmable, zbEntryMatches, zbInScope, zbHostPattern, zbGlobMatch,
-    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem };
+    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem, zbSanitizeSettings };
 }
