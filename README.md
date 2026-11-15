@@ -49,7 +49,7 @@ kept in a **Claude** tab group.
 
 Requirements:
 
-- macOS or Linux (Linux is untested; Windows isn't supported yet)
+- macOS or Linux (Linux passes the tests but is less tried; no Windows yet)
 - Zen or Firefox 140+
 - Python 3.10+ (the `python3` that ships with macOS is 3.9; `brew install python` works)
 - Claude Code
