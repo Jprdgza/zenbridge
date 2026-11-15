@@ -186,3 +186,15 @@ test("go-anywhere scope still excludes the add-on store", () => {
   assert.ok(!L.zbInScope(new Set(["*"]), "https://addons.mozilla.org"));
   assert.ok(!L.zbInScope(new Set(["*"]), null));
 });
+
+test("zbCssProblem: plain styling passes, anything that could fetch or hide a fetch is refused", () => {
+  for (const ok of ["body{color:red}", "p::before{content:'hi'}", "h1{font:16px/1.2 serif}", ".ad{display:none!important}",
+                    "@media (max-width:600px){nav{display:none}}", "a{background-image:linear-gradient(red,blue)}"]) {
+    assert.strictEqual(L.zbCssProblem(ok), null, ok);
+  }
+  for (const bad of ["a{background:url(x)}", "a{background:URL( x )}", "@import 'x';", "@IMPORT url(x);", "p{x:u\\72l(x)}",
+                     "a{b:image-set('a' 1x)}", "a{b:-webkit-image-set('a' 1x)}", "a{b:image('x.png')}", "a{b:cross-fade(x)}",
+                     "a{b:-moz-element(#x)}", "@font-face{font-family:f;src(x)}", "a{cursor:url\n(x)}", ""]) {
+    assert.notStrictEqual(L.zbCssProblem(bad), null, bad);
+  }
+});

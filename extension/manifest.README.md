@@ -8,7 +8,7 @@ JSON has no comments, so this file documents every permission.
 | Permission | Why |
 |---|---|
 | `nativeMessaging` | `runtime.connectNative("zenbridge")` to the local host. This is the only channel to Claude. |
-| `scripting` | `scripting.executeScript({func})` injects the fixed functions in `actions.js` into armed tabs. It is never called with a code string. |
+| `scripting` | `scripting.executeScript({func})` injects the fixed functions in `actions.js` into armed tabs. It is never called with a code string. `scripting.insertCSS` / `removeCSS` back the `inject_css` tool (top frame only, CSS that loads resources is refused). |
 | `tabGroups` | Names and colors the orange "Claude" tab group that holds the tabs Claude controls (`tabGroups.update`). Grouping itself (`tabs.group`) needs no permission. |
 | `activeTab` | Exposes `tab.url` in the toolbar click handler, so the origin can be passed to `permissions.request` synchronously. The grant is scoped to the user's gesture. |
 

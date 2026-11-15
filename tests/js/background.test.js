@@ -40,7 +40,10 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
     permissions: { onAdded: ev("permAdded"), onRemoved: ev("permRemoved"), request: (p) => { calls.push(["permissions.request", plain(p.origins)]); return Promise.resolve(grant); },
       contains: async () => hasPermission, getAll: async () => ({ origins: ["<all_urls>"] }),
       remove: async (p) => { calls.push(["permissions.remove", plain(p.origins)]); } },
-    scripting: { executeScript: async ({ target, func, args }) => {
+    scripting: {
+      insertCSS: async ({ target, css }) => { calls.push(["insertCSS", target.tabId, plain(target.frameIds), css]); },
+      removeCSS: async ({ target, css }) => { calls.push(["removeCSS", target.tabId, css]); },
+      executeScript: async ({ target, func, args }) => {
       calls.push(["exec", target.tabId, func.name, plain(target.frameIds)]);
       const r = func.name === "zbShow" && !(func.name in page) ? { ok: true } : page[func.name];
       return [{ result: typeof r === "function" ? r(args[0]) : r }];
@@ -379,6 +382,42 @@ test("without always-on, arming a tab does not start a session; the start page d
   await b.click(9);
   b.on.permAdded({ origins: ["<all_urls>"] });
   assert.strictEqual((await b.call("tabs_list", {})).result.session, true);
+});
+
+test("inject_css: adds CSS to the top frame, refuses anything that loads resources, clears", async () => {
+  const b = load({ goAnywhere: true });
+  assert.strictEqual((await b.call("inject_css", { tabId: 1, css: "body{color:red}" })).error.code, "NOT_ARMED");
+  await b.click(1);
+  const r = await b.call("inject_css", { tabId: 1, css: "body{color:red}" });
+  assert.deepStrictEqual(r.result, { tabId: 1, active: 1 });
+  assert.ok(b.calls.some((c) => c[0] === "insertCSS" && c[1] === 1 && c[2][0] === 0 && c[3] === "body{color:red}"));
+  for (const css of ["a{background:url(https://evil.example/x)}", "@import 'x.css';", "p{background:u\\72l(x)}",
+                     "div{background-image:image-set('a.png' 1x)}", "div{background:-moz-element(#x)}"]) {
+    const bad = await b.call("inject_css", { tabId: 1, css });
+    assert.strictEqual(bad.error.code, "REFUSED", css);
+  }
+  assert.strictEqual(b.calls.filter((c) => c[0] === "insertCSS").length, 1);
+  assert.strictEqual((await b.call("inject_css", { tabId: 1, css: "p{margin:0}" })).result.active, 2);
+  const cleared = await b.call("inject_css", { tabId: 1, clear: true });
+  assert.deepStrictEqual(cleared.result, { tabId: 1, active: 0 });
+  assert.deepStrictEqual(b.calls.filter((c) => c[0] === "removeCSS").map((c) => c[2]), ["body{color:red}", "p{margin:0}"]);
+  for (const args of [{ tabId: 1 }, { tabId: 1, css: "a{}", clear: true }, { tabId: 1, clear: false }, { tabId: 1, css: "" }]) {
+    assert.strictEqual((await b.call("inject_css", args)).error.code, "INVALID", JSON.stringify(args));
+  }
+});
+
+test("inject_css: navigation forgets added CSS; at most 20 sheets; disarm removes them", async () => {
+  const b = load({ goAnywhere: true });
+  await b.click(1);
+  await b.call("inject_css", { tabId: 1, css: "a{}" });
+  b.on.updated(1, { status: "loading" }, { ...b.tabs[1], id: 1 });
+  assert.strictEqual((await b.call("inject_css", { tabId: 1, css: "b{}" })).result.active, 1);
+  for (let i = 0; i < 19; i++) await b.call("inject_css", { tabId: 1, css: `i${i}{}` });
+  assert.strictEqual((await b.call("inject_css", { tabId: 1, css: "x{}" })).error.code, "REFUSED");
+  const n = b.calls.length;
+  await b.click(1);  // disarm
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(b.calls.slice(n).filter((c) => c[0] === "removeCSS").length, 20);
 });
 
 test("controlled tabs go into an orange 'Claude' tab group and leave it on disarm", async () => {

@@ -71,6 +71,11 @@ class NetworkGuards(unittest.TestCase):
         self.assertIn("frameIds: [0]", line)
         self.assertNotRegex(line, r"\bcode\s*:|\bfile\s*:|files\s*:")
         self.assertEqual(len(re.findall(r"captureTab\(", bg)), 1)
+        # CSS goes in only through inject_css, top frame only, always after the scope check.
+        self.assertEqual(len(re.findall(r"scripting\.insertCSS\(", bg)), 1)
+        ins = bg.index("scripting.insertCSS(")
+        self.assertTrue(bg.index("async inject_css(") < bg.index("zbCssProblem(a.css)", bg.index("async inject_css(")) < ins)
+        self.assertIn("frameIds: [0]", bg[ins:bg.index("\n", ins)])
         self.assertGreater(bg.index("captureTab("), bg.index("async screenshot("))
         self.assertIn("handleRequest(msg)", bg[bg.index("function connect("):])
 

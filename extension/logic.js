@@ -83,6 +83,17 @@ function zbIsSensitiveField(tag, type, autocomplete, nameAndId) {
   return ZB_SENSITIVE_NAME.test(String(nameAndId || ""));
 }
 
+// inject_css may restyle a page but never make it load anything: url(), @import and friends
+// could leak page data to a server (attribute-selector exfiltration). Backslash escapes are
+// refused so those words can't be disguised (u\72l(...)).
+const ZB_CSS_FETCH = /url\s*\(|@import|image-set\s*\(|\bimage\s*\(|cross-fade\s*\(|-moz-element|\bsrc\s*\(/i;
+function zbCssProblem(css) {
+  if (typeof css !== "string" || css.length === 0) return "css must be a non-empty string";
+  if (css.includes("\\")) return "backslash escapes are not allowed in injected CSS";
+  if (ZB_CSS_FETCH.test(css)) return "injected CSS may not load resources (url(), @import, image-set(), ...)";
+  return null;
+}
+
 // Scope given to a newly armed tab.
 function zbNewScope(origin, config) {
   return new Set(config.goAnywhere ? ["*"] : [origin, ...config.allowlist]);
@@ -98,5 +109,5 @@ function zbOpenAllowed(origin, allowlist, scopes) {
 
 if (typeof module !== "undefined") {
   module.exports = { zbOriginOf, zbArmable, zbEntryMatches, zbInScope, zbHostPattern, zbGlobMatch,
-    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope };
+    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem };
 }

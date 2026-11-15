@@ -23,7 +23,8 @@ const ZB_SCHEMA = {
       "read_page",
       "click",
       "type",
-      "scroll"
+      "scroll",
+      "inject_css"
      ],
      "type": "string"
     },
@@ -213,6 +214,65 @@ const ZB_SCHEMA = {
     "required": [
      "tag",
      "text"
+    ],
+    "type": "object"
+   }
+  },
+  "inject_css": {
+   "args": {
+    "additionalProperties": false,
+    "properties": {
+     "clear": {
+      "enum": [
+       true
+      ],
+      "type": "boolean"
+     },
+     "css": {
+      "maxLength": 50000,
+      "minLength": 1,
+      "type": "string"
+     },
+     "tabId": {
+      "maximum": 2147483647,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "tabId"
+    ],
+    "type": "object",
+    "x-oneOfGroups": {
+     "complete": true,
+     "groups": [
+      [
+       "css"
+      ],
+      [
+       "clear"
+      ]
+     ]
+    }
+   },
+   "description": "Add CSS to an armed tab's page (top frame), e.g. to hide clutter or restyle it; or clear:true to remove everything zenbridge added to that tab. CSS that loads anything (url(), @import, image-set()) or uses backslash escapes is refused. Added CSS lasts until the page navigates or reloads.",
+   "result": {
+    "additionalProperties": false,
+    "properties": {
+     "active": {
+      "maximum": 20,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "tabId": {
+      "maximum": 2147483647,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "tabId",
+     "active"
     ],
     "type": "object"
    }

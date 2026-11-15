@@ -23,12 +23,15 @@ Claude Code ──stdio──▶ server/zenbridge_mcp.py ──unix socket──
 | `read_page` | Visible text plus up to 100 links (never form values) |
 | `screenshot` | Viewport PNG or full-page JPEG |
 | `click`, `type`, `scroll` | By CSS selector or viewport coordinates |
+| `inject_css` | Restyle a page (hide clutter, change layout); `clear` removes it |
 
 Claude only sees tabs it opened itself and tabs you hand to it. Everything else
 in your browser is invisible to it.
 
 What it deliberately can't do: run arbitrary JavaScript, read cookies or
-storage, read form values, or type into password, one-time-code and card fields.
+storage, read form values, type into password, one-time-code and card fields,
+or inject CSS that loads anything (`url()`, `@import`, ...), since that could leak
+page data.
 
 While Claude works in a tab you'll see an orange glow, a "Claude is working in
 this tab" label, and a cursor that moves to whatever it clicks, types into or

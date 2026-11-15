@@ -89,8 +89,16 @@ async function setGrouped(tabId, on) {
   } catch (e) { /* unsupported or tab gone: the badge still shows control */ }
 }
 
+const injectedCss = new Map();  // tabId -> CSS strings inject_css added (gone after navigation)
+function clearCss(tabId) {
+  const list = injectedCss.get(tabId) || [];
+  injectedCss.delete(tabId);
+  return Promise.all(list.map((css) => browser.scripting.removeCSS({ target: { tabId, frameIds: [0] }, css }).catch(ignore)));
+}
+
 function disarm(tabId) {
   armed.delete(tabId);
+  clearCss(tabId);
   setBadge(tabId, undefined);
   setGrouped(tabId, false);
   releaseIfIdle();
@@ -116,8 +124,11 @@ browser.browserAction.onClicked.addListener((tab, info) => {
   });
 });
 
-browser.tabs.onUpdated.addListener((tabId, info, tab) => { if (armed.has(tabId)) setBadge(tabId, tab.url); });
-browser.tabs.onRemoved.addListener((tabId) => { armed.delete(tabId); releaseIfIdle(); });
+browser.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status === "loading") injectedCss.delete(tabId);  // navigation/reload drops inserted CSS
+  if (armed.has(tabId)) setBadge(tabId, tab.url);
+});
+browser.tabs.onRemoved.addListener((tabId) => { armed.delete(tabId); injectedCss.delete(tabId); releaseIfIdle(); });
 browser.commands.onCommand.addListener((name) => {
   if (name === "disarm-all") endAll();
   if (name === "start-session" && !session) startSession();
@@ -264,6 +275,19 @@ const TOOLS = {
     return { tag: String(r.tag).slice(0, 40), typed: Math.min(int(r.typed), 10000),
       method: ["insertText", "setter", "none"].includes(r.method) ? r.method : "none" };
   },
+  async inject_css(a, ctx) {
+    const tabId = ctx.tab.id;
+    if (a.clear) { await clearCss(tabId); return { tabId, active: 0 }; }
+    const problem = zbCssProblem(a.css);
+    if (problem) throw new ZbError("REFUSED", problem, ctx.url);
+    const list = injectedCss.get(tabId) || [];
+    if (list.length >= 20) throw new ZbError("REFUSED", "20 stylesheets already added; use clear:true first", ctx.url);
+    await browser.scripting.insertCSS({ target: { tabId, frameIds: [0] }, css: a.css });
+    list.push(a.css);
+    injectedCss.set(tabId, list);
+    try { await resolveArmedTab(tabId); } catch (e) { await clearCss(tabId); throw e; }  // navigated away meanwhile
+    return { tabId, active: list.length };
+  },
   async scroll(a, ctx) {
     const r = await inject(ctx, zbScroll, withoutTab(a));
     return { scrollX: num(r.scrollX), scrollY: num(r.scrollY) };
@@ -283,9 +307,9 @@ async function handleRequest(msg) {
   let ctx = null;
   try {
     if (Object.hasOwn(msg.args, "tabId")) ctx = await resolveArmedTab(msg.args.tabId);
-    if (ctx && ["click", "type", "scroll", "read_page"].includes(msg.tool)) {
-      const a = msg.args;
-      await cue(ctx, msg.tool === "read_page" ? { kind: "glow" } : { kind: msg.tool, selector: a.selector, x: a.x, y: a.y }, msg.tool !== "read_page");
+    if (ctx && ["click", "type", "scroll", "read_page", "inject_css"].includes(msg.tool)) {
+      const a = msg.args, glowOnly = ["read_page", "inject_css"].includes(msg.tool);
+      await cue(ctx, glowOnly ? { kind: "glow" } : { kind: msg.tool, selector: a.selector, x: a.x, y: a.y }, !glowOnly);
     }
     const result = await TOOLS[msg.tool](msg.args, ctx);
     const rerr = zbValidateResult(ZB_SCHEMA, msg.tool, result);
