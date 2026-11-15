@@ -1,0 +1,782 @@
+{
+  "version": 1,
+  "limits": {
+    "maxFrameBytes": 16777216,
+    "maxText": 10000,
+    "maxSelector": 1000,
+    "maxUrlPattern": 500,
+    "maxUrl": 2048,
+    "timeoutSeconds": 15,
+    "screenshotTimeoutSeconds": 30
+  },
+  "errorCodes": [
+    "NOT_ARMED",
+    "OUT_OF_SCOPE",
+    "INVALID",
+    "TIMEOUT",
+    "NOT_CONNECTED",
+    "REFUSED",
+    "INTERNAL"
+  ],
+  "envelope": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "id",
+        "tool",
+        "args"
+      ],
+      "properties": {
+        "v": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16,64}$"
+        },
+        "tool": {
+          "type": "string",
+          "enum": [
+            "tabs_list",
+            "tab_switch",
+            "tab_open",
+            "tab_close",
+            "navigate",
+            "reload",
+            "screenshot",
+            "read_page",
+            "click",
+            "type",
+            "scroll"
+          ]
+        },
+        "args": {
+          "type": "object"
+        }
+      }
+    },
+    "responseOk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "id",
+        "ok",
+        "result"
+      ],
+      "properties": {
+        "v": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16,64}$"
+        },
+        "ok": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "result": {
+          "type": "object"
+        },
+        "tabUrl": {
+          "type": "string",
+          "maxLength": 2048
+        }
+      }
+    },
+    "responseErr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "id",
+        "ok",
+        "error"
+      ],
+      "properties": {
+        "v": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16,64}$"
+        },
+        "ok": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "NOT_ARMED",
+                "OUT_OF_SCOPE",
+                "INVALID",
+                "TIMEOUT",
+                "NOT_CONNECTED",
+                "REFUSED",
+                "INTERNAL"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 500
+            }
+          }
+        },
+        "tabUrl": {
+          "type": "string",
+          "maxLength": 2048
+        }
+      }
+    }
+  },
+  "tools": {
+    "tabs_list": {
+      "description": "List the tabs Claude may use (tabId, title, url, active, inScope) and whether a Claude session is active. If the list is empty but session is true, open your own tabs with tab_open.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabs",
+          "session"
+        ],
+        "properties": {
+          "tabs": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "tabId",
+                "title",
+                "url",
+                "active",
+                "inScope"
+              ],
+              "properties": {
+                "tabId": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "title": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "url": {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                "active": {
+                  "type": "boolean"
+                },
+                "inScope": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "session": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "tab_switch": {
+      "description": "Make an armed tab the active tab of its window.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        }
+      }
+    },
+    "tab_open": {
+      "description": "Open a new tab on any http/https site (go-anywhere mode; otherwise localhost or a site already armed). It is armed automatically when a Claude session is active or the user has armed a tab; check the 'armed' field.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 2048,
+            "pattern": "^https?://[!-~]+$"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId",
+          "armed",
+          "note"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "armed": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 300
+          }
+        }
+      }
+    },
+    "tab_close": {
+      "description": "Close an armed, in-scope tab.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        }
+      }
+    },
+    "navigate": {
+      "description": "Navigate an armed tab to an http/https URL in that tab's scope (any site in go-anywhere mode).",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId",
+          "url"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "url": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 2048,
+            "pattern": "^https?://[!-~]+$"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId",
+          "url"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        }
+      }
+    },
+    "reload": {
+      "description": "Reload every armed, in-scope tab whose URL matches a simple glob (only * is special).",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "urlPattern"
+        ],
+        "properties": {
+          "urlPattern": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "bypassCache": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reloaded"
+        ],
+        "properties": {
+          "reloaded": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          }
+        }
+      }
+    },
+    "screenshot": {
+      "description": "Screenshot an armed tab. Image pixels equal CSS pixels. Viewport = PNG; fullPage = JPEG capped at 1280x8000 CSS px.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "fullPage": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mimeType",
+          "data",
+          "width",
+          "height",
+          "scrollX",
+          "scrollY",
+          "viewport",
+          "document",
+          "truncated"
+        ],
+        "properties": {
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg"
+            ]
+          },
+          "data": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000000,
+            "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "scrollX": {
+            "type": "number",
+            "minimum": -1000000,
+            "maximum": 100000000
+          },
+          "scrollY": {
+            "type": "number",
+            "minimum": -1000000,
+            "maximum": 100000000
+          },
+          "viewport": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "width",
+              "height"
+            ],
+            "properties": {
+              "width": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              }
+            }
+          },
+          "document": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "width",
+              "height"
+            ],
+            "properties": {
+              "width": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000000
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000000
+              }
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "read_page": {
+      "description": "Read an armed tab's visible text (and up to 100 links). Form field values are never included.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "maxChars": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 50000
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "url",
+          "text",
+          "truncated",
+          "links"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 50000
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "text",
+                "href"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                "href": {
+                  "type": "string",
+                  "maxLength": 2048
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "click": {
+      "description": "Click an element by CSS selector, or at viewport CSS-pixel coordinates (x, y). Give exactly one of selector or x+y. Events are synthetic (isTrusted=false).",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId"
+        ],
+        "x-oneOfGroups": {
+          "groups": [
+            [
+              "selector"
+            ],
+            [
+              "x",
+              "y"
+            ]
+          ],
+          "complete": true
+        },
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100000
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tag",
+          "text"
+        ],
+        "properties": {
+          "tag": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "type": {
+      "description": "Type text into the element matched by selector (or the focused element), then optionally press one key. Refuses password and credit-card fields.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId",
+          "text"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "clear": {
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "Enter",
+              "Tab",
+              "Escape",
+              "Backspace",
+              "ArrowUp",
+              "ArrowDown",
+              "ArrowLeft",
+              "ArrowRight"
+            ]
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tag",
+          "typed",
+          "method"
+        ],
+        "properties": {
+          "tag": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "typed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "insertText",
+              "setter",
+              "none"
+            ]
+          }
+        }
+      }
+    },
+    "scroll": {
+      "description": "Scroll an armed tab by (dx, dy) CSS pixels, or scroll the element matched by selector into view. Give selector or dx/dy, not both.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabId"
+        ],
+        "x-oneOfGroups": {
+          "groups": [
+            [
+              "selector"
+            ],
+            [
+              "dx",
+              "dy"
+            ]
+          ],
+          "complete": false
+        },
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "dx": {
+            "type": "number",
+            "minimum": -1000000,
+            "maximum": 1000000
+          },
+          "dy": {
+            "type": "number",
+            "minimum": -1000000,
+            "maximum": 1000000
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scrollX",
+          "scrollY"
+        ],
+        "properties": {
+          "scrollX": {
+            "type": "number",
+            "minimum": -1000000,
+            "maximum": 100000000
+          },
+          "scrollY": {
+            "type": "number",
+            "minimum": -1000000,
+            "maximum": 100000000
+          }
+        }
+      }
+    }
+  }
+}

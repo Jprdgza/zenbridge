@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.xpi
+web-ext-artifacts/
+.DS_Store
+.amo-upload-uuid

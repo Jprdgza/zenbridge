@@ -1,0 +1,58 @@
+{
+  "manifest_version": 2,
+  "name": "zenbridge",
+  "version": "1.2.2",
+  "description": "Lets a local Claude Code session drive tabs you explicitly arm. Local only: native messaging, no network.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "zenbridge@jprdgza.github.io",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "scripting",
+    "activeTab",
+    "tabGroups"
+  ],
+  "optional_permissions": [
+    "http://*/*",
+    "https://*/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "config.js",
+      "schema.js",
+      "validate.js",
+      "logic.js",
+      "actions.js",
+      "background.js"
+    ],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "zenbridge: click to arm this tab, or click on a new tab to start a Claude session",
+    "default_icon": "icons/zb.svg"
+  },
+  "commands": {
+    "disarm-all": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "Disarm every zenbridge tab"
+    },
+    "start-session": {
+      "suggested_key": {
+        "default": "Alt+Shift+C"
+      },
+      "description": "Start a Claude session (Claude can open its own tabs)"
+    }
+  },
+  "content_security_policy": "script-src 'self'; object-src 'none'"
+}
