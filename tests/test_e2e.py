@@ -116,6 +116,40 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(entries[2]["tabId"], 9)
         self.assertIn("NOT_ARMED", entries[2]["reason"])
 
+    def start_server(self):
+        srv = subprocess.Popen([PY, "-I", os.path.join(ROOT, "server", "zenbridge_mcp.py")], env=self.env,
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(stop, srv)
+        return srv
+
+    def call_on(self, srv, name, arguments):
+        msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
+        srv.stdin.write(json.dumps(msg).encode() + b"\n")
+        srv.stdin.flush()
+        return json.loads(srv.stdout.readline())["result"]
+
+    def test_several_claude_sessions_share_the_host(self):
+        """Each call connects and hangs up, so one session never locks the others out."""
+        other = self.start_server()
+        for _ in range(5):
+            for srv in (self.server, other):
+                r = self.call_on(srv, "tabs_list", {})
+                self.assertNotIn("isError", r, r)
+
+    def test_busy_host_gives_a_clear_error_then_recovers(self):
+        import socket as socketlib
+        hog = socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM)
+        hog.connect(self.sock)  # holds the host's only client slot
+        time.sleep(0.2)
+        start = time.monotonic()
+        r = self.call_on(self.server, "tabs_list", {})
+        self.assertTrue(r["isError"])
+        self.assertIn("another Claude session is using zenbridge", r["content"][0]["text"])
+        self.assertGreaterEqual(time.monotonic() - start, 4)  # waited for the slot before giving up
+        hog.close()
+        time.sleep(0.3)
+        self.assertNotIn("isError", self.call_on(self.server, "tabs_list", {}))
+
     def test_host_refuses_foreign_extension_id(self):
         p = subprocess.run([PY, "-I", os.path.join(ROOT, "host", "zenbridge_host.py"), "/x.json", "evil@example.com"],
                            env=self.env, capture_output=True, timeout=10)
