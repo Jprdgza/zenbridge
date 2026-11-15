@@ -1,5 +1,9 @@
 # zenbridge
 
+[![Install in Zen / Firefox](https://img.shields.io/badge/Install-Zen%20%2F%20Firefox-cba6f7?style=for-the-badge&logo=firefoxbrowser&logoColor=11111b&labelColor=1e1e2e)](https://jprdgza.github.io/zenbridge/zenbridge.xpi)
+[![Latest release](https://img.shields.io/github/v/release/Jprdgza/zenbridge?style=for-the-badge&color=cba6f7&labelColor=1e1e2e)](https://github.com/Jprdgza/zenbridge/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Jprdgza/zenbridge/ci.yml?branch=main&style=for-the-badge&label=tests&labelColor=1e1e2e)](https://github.com/Jprdgza/zenbridge/actions/workflows/ci.yml)
+
 Let [Claude Code](https://claude.com/claude-code) drive your real, logged-in
 [Zen Browser](https://zen-browser.app) or Firefox: open tabs, read pages,
 click, type, scroll, restyle pages and take screenshots.
@@ -50,11 +54,15 @@ Requirements:
 - Python 3.10+ (the `python3` that ships with macOS is 3.9; `brew install python` works)
 - Claude Code
 
-1. **Install the add-on** from addons.mozilla.org, or build your own: sign it
-   as an unlisted add-on with your own [AMO API key](https://addons.mozilla.org/developers/addon/api/key/).
-   An add-on ID belongs to whoever signs it first, so for your own build change
-   `zenbridge@jprdgza.github.io` in `extension/manifest.json`,
-   `host/zenbridge_host.py`, `install.sh`, `uninstall.sh` and `tests/`.
+1. **Install the add-on.** Click **Install** at the top of this page (or grab the
+   `.xpi` from the [latest release](https://github.com/Jprdgza/zenbridge/releases/latest)).
+   It's signed by Mozilla. If the browser asks, choose *Continue to installation*.
+
+   To build your own instead, sign it as an unlisted add-on with your own
+   [AMO API key](https://addons.mozilla.org/developers/addon/api/key/). An add-on ID
+   belongs to whoever signs it first, so change `zenbridge@jprdgza.github.io` in
+   `extension/manifest.json`, `host/zenbridge_host.py`, `install.sh`, `uninstall.sh`
+   and `tests/` first.
 
    ```bash
    WEB_EXT_API_KEY='user:...' WEB_EXT_API_SECRET='...' npx web-ext@8 sign --channel=unlisted --source-dir extension --artifacts-dir web-ext-artifacts
@@ -166,6 +174,9 @@ cd tests/js && node --test
 `schema/tools.json` is the single source of truth. After editing it, run
 `python3 gen_schema.py` to regenerate `extension/schema.js` (a test checks they
 match). `extension/manifest.README.md` explains each permission.
+
+Changes per version are in [CHANGELOG.md](CHANGELOG.md). Pushing a `v*` tag signs and
+publishes a release; see [docs/releasing.md](docs/releasing.md).
 
 ## Uninstall
 
