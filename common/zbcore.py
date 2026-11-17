@@ -62,6 +62,8 @@ def validate(schema, v, path="$"):
     if t == "array":
         if len(v) > schema.get("maxItems", 1 << 62):
             return f"{path}: too many items"
+        if len(v) < schema.get("minItems", 0):
+            return f"{path}: too few items"
         for i, item in enumerate(v):
             err = validate(schema.get("items", {}), item, f"{path}[{i}]")
             if err:
@@ -79,12 +81,13 @@ def validate(schema, v, path="$"):
             err = validate(props[k], item, f"{path}.{k}")
             if err:
                 return err
-        g = schema.get("x-oneOfGroups")
-        if g:
+        groups = schema.get("x-oneOfGroups")
+        for g in groups if isinstance(groups, list) else [groups] if groups else []:
             touched = [grp for grp in g["groups"] if any(k in v for k in grp)]
-            if len(touched) != 1:
-                return f"{path}: give exactly one of " + " | ".join("+".join(x) for x in g["groups"])
-            if g["complete"] and not all(k in v for k in touched[0]):
+            if len(touched) > 1 or (not touched and not g.get("optional")):
+                word = "at most" if g.get("optional") else "exactly"
+                return f"{path}: give {word} one of " + " | ".join("+".join(x) for x in g["groups"])
+            if touched and g["complete"] and not all(k in v for k in touched[0]):
                 return f"{path}: need all of " + "+".join(touched[0])
     return None
 

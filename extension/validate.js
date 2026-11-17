@@ -28,6 +28,7 @@ function zbValidate(schema, v, path = "$") {
   }
   if (t === "array") {
     if (v.length > (schema.maxItems ?? Infinity)) return `${path}: too many items`;
+    if (v.length < (schema.minItems ?? 0)) return `${path}: too few items`;
     for (let i = 0; i < v.length; i++) {
       const e = zbValidate(schema.items || {}, v[i], `${path}[${i}]`);
       if (e) return e;
@@ -44,11 +45,13 @@ function zbValidate(schema, v, path = "$") {
       const e = zbValidate(props[k], v[k], `${path}.${k}`);
       if (e) return e;
     }
-    const g = schema["x-oneOfGroups"];
-    if (g) {
+    const groups = schema["x-oneOfGroups"];
+    for (const g of Array.isArray(groups) ? groups : groups ? [groups] : []) {
       const touched = g.groups.filter((grp) => grp.some((k) => Object.hasOwn(v, k)));
-      if (touched.length !== 1) return `${path}: give exactly one of ` + g.groups.map((x) => x.join("+")).join(" | ");
-      if (g.complete && !touched[0].every((k) => Object.hasOwn(v, k))) return `${path}: need all of ` + touched[0].join("+");
+      if (touched.length > 1 || (touched.length === 0 && !g.optional)) {
+        return `${path}: give ${g.optional ? "at most" : "exactly"} one of ` + g.groups.map((x) => x.join("+")).join(" | ");
+      }
+      if (touched.length && g.complete && !touched[0].every((k) => Object.hasOwn(v, k))) return `${path}: need all of ` + touched[0].join("+");
     }
   }
   return null;

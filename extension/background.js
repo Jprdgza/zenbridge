@@ -112,14 +112,25 @@ async function setGrouped(tabId, on) {
 }
 
 const injectedCss = new Map();  // tabId -> CSS strings inject_css added (gone after navigation)
+const consoleTabs = new Set();  // tabs where Claude asked for console messages: re-hooked on each page load
+const net = new Map();          // tabId -> { doc: page origin, list: requests } (armed tabs only, in memory)
+const uploads = new Map();      // uploadId -> pieces of a file on its way to file_upload
 function clearCss(tabId) {
   const list = injectedCss.get(tabId) || [];
   injectedCss.delete(tabId);
   return Promise.all(list.map((css) => browser.scripting.removeCSS({ target: { tabId, frameIds: [0] }, css }).catch(ignore)));
 }
 
+function forgetTab(tabId) {
+  injectedCss.delete(tabId);
+  consoleTabs.delete(tabId);
+  net.delete(tabId);
+}
+
 function disarm(tabId) {
   armed.delete(tabId);
+  consoleTabs.delete(tabId);
+  net.delete(tabId);
   clearCss(tabId);
   setBadge(tabId, undefined);
   setGrouped(tabId, false);
@@ -148,9 +159,35 @@ browser.browserAction.onClicked.addListener((tab, info) => {
 
 browser.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === "loading") injectedCss.delete(tabId);  // navigation/reload drops inserted CSS
+  if (info.status === "complete" && consoleTabs.has(tabId)) hookConsole(tabId);
   if (armed.has(tabId)) setBadge(tabId, tab.url);
 });
-browser.tabs.onRemoved.addListener((tabId) => { armed.delete(tabId); injectedCss.delete(tabId); releaseIfIdle(); });
+browser.tabs.onRemoved.addListener((tabId) => { armed.delete(tabId); forgetTab(tabId); releaseIfIdle(); });
+
+// Network log for network_requests: armed tabs only, newest 500 per tab, credentials in URLs redacted.
+// Each entry remembers the page that made it, so nothing from an out-of-scope page is ever shown.
+function onNetwork(d, error) {
+  if (!armed.has(d.tabId)) return;
+  const url = zbRedactUrl(d.url);
+  if (!url) return;
+  const doc = d.type === "main_frame" ? zbOriginOf(d.url) : zbOriginOf(d.documentUrl || d.originUrl || "");
+  let rec = net.get(d.tabId);
+  if (!rec) net.set(d.tabId, rec = { doc, list: [] });
+  rec.list.push({ method: String(d.method || "").slice(0, 16), url, type: String(d.type || "").slice(0, 40),
+    status: Math.min(999, Math.max(0, Math.round(Number(d.statusCode) || 0))), time: Number(d.timeStamp) || 0, doc,
+    ...(error ? { error: String(error).slice(0, 200) } : {}) });
+  if (rec.list.length > 500) rec.list.splice(0, rec.list.length - 500);
+}
+if (browser.webRequest) {
+  const all = { urls: ["<all_urls>"] };
+  browser.webRequest.onBeforeRequest.addListener((d) => {  // a new site in the tab starts a fresh log
+    if (d.type !== "main_frame" || !armed.has(d.tabId)) return;
+    const doc = zbOriginOf(d.url), rec = net.get(d.tabId);
+    if (!rec || rec.doc !== doc) net.set(d.tabId, { doc, list: [] });
+  }, { ...all, types: ["main_frame"] });
+  browser.webRequest.onCompleted.addListener((d) => onNetwork(d), all);
+  browser.webRequest.onErrorOccurred.addListener((d) => onNetwork(d, d.error), all);
+}
 browser.commands.onCommand.addListener((name) => {
   if (name === "disarm-all") endAll();
   if (name === "start-session" && !session) startSession();
@@ -196,6 +233,10 @@ async function inject(ctx, func, arg, ms = 8000) {
   return r.result;
 }
 
+function hookConsole(tabId) {
+  resolveArmedTab(tabId).then((ctx) => inject(ctx, zbPage, { op: "consoleHook" }, 3000)).catch(ignore);
+}
+
 // Visual cue in the page before an action; never blocks or fails the action itself.
 async function cue(ctx, arg, pause) {
   if (!ZB_CONFIG.showActivity) return;
@@ -205,6 +246,22 @@ async function cue(ctx, arg, pause) {
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const int = (v) => Math.max(0, Math.round(num(v)));
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, num(v)));
+const str = (v, n) => String(v == null ? "" : v).slice(0, n);
+const REF = /^ref_[0-9]{1,7}$/;
+const UPLOAD_HOLD = 15000000;  // base64 characters held at once (10 MB of files)
+// tabs.update/goBack/goForward resolve before the new page commits, so the next call would still see
+// the old page. Wait (up to 5 s) until the URL changes, or a same-URL load starts and finishes.
+async function settled(tabId, before) {
+  let tab, loading = false;
+  for (let i = 0; i < 50; i++) {
+    tab = await browser.tabs.get(tabId);
+    if (tab.status === "loading") loading = true;
+    if ((tab.url && tab.url !== before && tab.url !== "about:blank") || (loading && tab.status === "complete")) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return tab;
+}
 const withoutTab = ({ tabId, ...rest }) => rest;
 
 const TOOLS = {
@@ -250,8 +307,17 @@ const TOOLS = {
     return { tabId: ctx.tab.id };
   },
   async navigate(a, ctx) {
+    const before = ctx.tab.url;
+    if (a.history) {
+      await (a.history === "back" ? browser.tabs.goBack(ctx.tab.id) : browser.tabs.goForward(ctx.tab.id));
+      const tab = await settled(ctx.tab.id, before);
+      // Report where history landed, but never the URL of a page outside this tab's scope.
+      const url = zbInScope(ctx.scope, zbOriginOf(tab.url)) ? str(tab.url, 2048) : "(a page outside this tab's scope)";
+      return { tabId: ctx.tab.id, url };
+    }
     if (!zbInScope(ctx.scope, zbOriginOf(a.url))) throw new ZbError("OUT_OF_SCOPE", "target origin is not in this tab's scope", ctx.url);
     await browser.tabs.update(ctx.tab.id, { url: a.url });
+    await settled(ctx.tab.id, before);
     return { tabId: ctx.tab.id, url: a.url };
   },
   async reload(a) {
@@ -273,9 +339,13 @@ const TOOLS = {
       throw new ZbError("REFUSED", "page shows cross-origin frames/embeds that a screenshot would reveal; use click/scroll instead", ctx.url);
     }
     const vw = int(m.vw), vh = int(m.vh), dw = int(m.dw), dh = int(m.dh);
+    const g = a.region;
+    if (g && (g.x >= vw || g.y >= vh)) throw new ZbError("INVALID", "region starts outside the viewport", ctx.url);
     const opts = a.fullPage
       ? { format: "jpeg", quality: 80, scale: 1, rect: { x: 0, y: 0, width: Math.min(dw, 1280), height: Math.min(dh, 8000) } }
-      : { format: "png", scale: 1 };  // scale is device px per CSS px: 1 => image px == CSS px
+      : g  // rect is in page coordinates; scale 2 zooms the region in
+        ? { format: "png", scale: 2, rect: { x: num(m.scrollX) + g.x, y: num(m.scrollY) + g.y, width: Math.min(g.width, vw - g.x), height: Math.min(g.height, vh - g.y) } }
+        : { format: "png", scale: 1 };  // scale is device px per CSS px: 1 => image px == CSS px
     await cue(ctx, { hide: true });  // keep the overlay out of the image
     let dataUrl;
     try {
@@ -287,7 +357,9 @@ const TOOLS = {
     const prefix = `data:${mime};base64,`;
     if (typeof dataUrl !== "string" || !dataUrl.startsWith(prefix)) throw new ZbError("INTERNAL", "unexpected capture format", ctx.url);
     return { mimeType: mime, data: dataUrl.slice(prefix.length),
-      width: a.fullPage ? opts.rect.width : vw, height: a.fullPage ? opts.rect.height : vh,
+      width: a.fullPage ? opts.rect.width : g ? Math.round(opts.rect.width * 2) : vw,
+      height: a.fullPage ? opts.rect.height : g ? Math.round(opts.rect.height * 2) : vh,
+      ...(g ? { scale: 2 } : {}),
       scrollX: num(m.scrollX), scrollY: num(m.scrollY), viewport: { width: vw, height: vh },
       document: { width: dw, height: dh }, truncated: !!a.fullPage && (dw > 1280 || dh > 8000) };
   },
@@ -304,7 +376,7 @@ const TOOLS = {
     return { tag: String(r.tag).slice(0, 40), text: String(r.text).slice(0, 200) };
   },
   async type(a, ctx) {
-    const info = await inject(ctx, zbFieldInfo, { selector: a.selector });
+    const info = await inject(ctx, zbFieldInfo, { selector: a.selector, ref: a.ref });
     if (info.found && zbIsSensitiveField(info.tag, info.type, info.autocomplete, info.nameAndId)) {
       throw new ZbError("REFUSED", "refusing to type into a password or credit-card field", ctx.url);
     }
@@ -327,9 +399,110 @@ const TOOLS = {
   },
   async scroll(a, ctx) {
     const r = await inject(ctx, zbScroll, withoutTab(a));
-    return { scrollX: num(r.scrollX), scrollY: num(r.scrollY) };
+    return { scrollX: clamp(r.scrollX, -1000000, 100000000), scrollY: clamp(r.scrollY, -1000000, 100000000),
+      target: r.target === "element" ? "element" : "page" };
+  },
+  async read_tree(a, ctx) {
+    const max = a.maxChars || 50000;
+    const r = await inject(ctx, zbPage, { op: "tree", filter: a.filter || "all", depth: a.depth || 30, ref: a.ref, maxChars: max });
+    return { title: str(r.title, 200), url: str(ctx.url, 2048), tree: str(r.tree, max), truncated: !!r.truncated,
+      nodes: Math.min(int(r.nodes), 1000000) };
+  },
+  async find(a, ctx) {
+    const r = await inject(ctx, zbPage, { op: "find", query: a.query });
+    const matches = (Array.isArray(r.matches) ? r.matches : []).slice(0, 20).filter((m) => m && REF.test(m.ref))
+      .map((m) => ({ ref: m.ref, role: str(m.role, 40), name: str(m.name, 200), x: clamp(m.x, -1000000, 1000000),
+        y: clamp(m.y, -1000000, 100000000), inView: !!m.inView }));
+    return { matches, more: !!r.more };
+  },
+  async hover(a, ctx) {
+    const r = await inject(ctx, zbPage, { op: "hover", ...withoutTab(a) });
+    return { tag: str(r.tag, 40), text: str(r.text, 200) };
+  },
+  async drag(a, ctx) {
+    const r = await inject(ctx, zbPage, { op: "drag", from: a.from, to: a.to });
+    await cue(ctx, { kind: "hover", ...a.to });
+    return { tag: str(r.tag, 40), text: str(r.text, 200), html5: !!r.html5 };
+  },
+  async key(a, ctx) {
+    const r = await inject(ctx, zbPage, { op: "key", ...withoutTab(a) });
+    return { tag: str(r.tag, 40), pressed: Math.min(int(r.pressed), 100000) };
+  },
+  async form_input(a, ctx) {
+    const r = await inject(ctx, zbPage, { op: "form", ...withoutTab(a) });
+    return { tag: str(r.tag, 40), kind: ["select", "checkbox", "radio", "text", "editable"].includes(r.kind) ? r.kind : "text",
+      applied: !!r.applied };
+  },
+  async wait_for(a, ctx) {
+    const seconds = a.seconds === undefined ? 3 : a.seconds;
+    if (a.selector === undefined && a.text === undefined) {
+      if (seconds > 0) await new Promise((r) => setTimeout(r, seconds * 1000));
+      await resolveArmedTab(ctx.tab.id);
+      return { met: true, waited: seconds };
+    }
+    const r = await inject(ctx, zbPage, { op: "wait", selector: a.selector, text: a.text, gone: !!a.gone, seconds }, seconds * 1000 + 3000);
+    return { met: !!r.met, waited: clamp(r.waited, 0, 60) };
+  },
+  async resize_window(a, ctx) {
+    const win = await browser.windows.get(ctx.tab.windowId);
+    if (win && win.state && win.state !== "normal") await browser.windows.update(ctx.tab.windowId, { state: "normal" });
+    const w = await browser.windows.update(ctx.tab.windowId, { width: a.width, height: a.height });
+    return { width: Math.min(int(w && w.width), 100000), height: Math.min(int(w && w.height), 100000) };
+  },
+  async console_messages(a, ctx) {
+    consoleTabs.add(ctx.tab.id);
+    const r = await inject(ctx, zbPage, { op: "consoleRead", filter: a.filter || "", onlyErrors: !!a.onlyErrors, clear: !!a.clear, limit: a.limit || 100 });
+    const levels = ["log", "info", "warn", "error", "debug", "exception"];
+    const messages = (Array.isArray(r.messages) ? r.messages : []).slice(-500).filter((m) => m && levels.includes(m.level))
+      .map((m) => ({ level: m.level, text: str(m.text, 2000), time: clamp(m.time, 0, 1e15) }));
+    const capturing = !!r.capturing;
+    return { messages, capturing, note: capturing
+      ? "Captured since the first console_messages call for this tab, and from each later page load (load-time messages may be missed)."
+      : "Console capture is not available on this page." };
+  },
+  async network_requests(a, ctx) {
+    const rec = net.get(ctx.tab.id);
+    let list = rec ? rec.list.filter((e) => zbInScope(ctx.scope, e.doc)) : [];
+    if (a.urlPattern) list = list.filter((e) => e.url.includes(a.urlPattern));
+    const requests = list.slice(-(a.limit || 100)).map(({ doc, ...e }) => e);
+    if (a.clear && rec) rec.list = [];
+    return { requests };
+  },
+  async upload_chunk(a) {
+    if (!session && armed.size === 0) throw new ZbError("NOT_ARMED", "Claude is off: no tab is armed");
+    const now = Date.now();
+    for (const [id, u] of uploads) if (now - u.t > 120000) uploads.delete(id);
+    let u = uploads.get(a.uploadId);
+    if (!u) uploads.set(a.uploadId, u = { parts: new Array(a.total).fill(null), total: a.total, name: a.name, mimeType: a.mimeType, got: 0, t: now });
+    if (u.total !== a.total || u.name !== a.name || u.mimeType !== a.mimeType || a.index >= a.total) {
+      uploads.delete(a.uploadId);
+      throw new ZbError("INVALID", "inconsistent upload piece");
+    }
+    let held = 0;
+    for (const x of uploads.values()) for (const p of x.parts) held += p ? p.length : 0;
+    if (held + a.data.length > UPLOAD_HOLD) { uploads.delete(a.uploadId); throw new ZbError("REFUSED", "uploads are limited to 10 MB at a time"); }
+    if (u.parts[a.index] === null) u.got++;
+    u.parts[a.index] = a.data;
+    u.t = now;
+    return { received: u.got };
+  },
+  async file_upload(a, ctx) {
+    const files = [];
+    for (const id of a.uploads) {
+      const u = uploads.get(id);
+      if (!u || u.got !== u.total) throw new ZbError("INVALID", "upload incomplete or expired; try again", ctx.url);
+      files.push({ name: u.name, mimeType: u.mimeType, data: u.parts.join("") });
+    }
+    for (const id of a.uploads) uploads.delete(id);
+    const { tabId, uploads: _ids, ...target } = a;
+    const r = await inject(ctx, zbPage, { op: "upload", ...target, files }, 12000);
+    return { files: Math.min(int(r.files), 10), bytes: Math.min(int(r.bytes), 100000000), target: r.target === "drop" ? "drop" : "input" };
   },
 };
+
+// Activity cue per tool: a cursor/highlight on the target, a glow only, or nothing.
+const CUES = { click: "click", hover: "hover", drag: "hover", type: "type", key: "type", form_input: "type", file_upload: "type",
+  scroll: "scroll", read_page: "glow", read_tree: "glow", find: "glow", inject_css: "glow", wait_for: "glow" };
 
 // validate -> resolve tab -> check armed -> check scope -> perform -> validate result -> return
 async function handleRequest(msg) {
@@ -345,9 +518,10 @@ async function handleRequest(msg) {
   let ctx = null;
   try {
     if (Object.hasOwn(msg.args, "tabId")) ctx = await resolveArmedTab(msg.args.tabId);
-    if (ctx && ["click", "type", "scroll", "read_page", "inject_css"].includes(msg.tool)) {
-      const a = msg.args, glowOnly = ["read_page", "inject_css"].includes(msg.tool);
-      await cue(ctx, glowOnly ? { kind: "glow" } : { kind: msg.tool, selector: a.selector, x: a.x, y: a.y }, !glowOnly);
+    const kind = ctx && CUES[msg.tool];
+    if (kind) {
+      const a = msg.tool === "drag" ? msg.args.from : msg.args;
+      await cue(ctx, kind === "glow" ? { kind } : { kind, selector: a.selector, ref: a.ref, x: a.x, y: a.y }, kind !== "glow");
     }
     const result = await TOOLS[msg.tool](msg.args, ctx);
     const rerr = zbValidateResult(ZB_SCHEMA, msg.tool, result);

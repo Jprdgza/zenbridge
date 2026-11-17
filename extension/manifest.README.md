@@ -12,6 +12,7 @@ JSON has no comments, so this file documents every permission.
 | `activeTab` | Exposes `tab.url` in the toolbar click handler, so the origin can be passed to `permissions.request` synchronously. The grant is scoped to the user's gesture. |
 | `tabGroups` | Names and colors the "Claude" tab group that holds the tabs Claude controls (`tabGroups.update`). Grouping itself (`tabs.group`) needs no permission. |
 | `storage` | The settings page saves one key, `settings`, in `storage.local`. The background re-validates it on every read. Nothing else is stored. |
+| `webRequest` | Read-only observation (`onBeforeRequest`, `onCompleted`, `onErrorOccurred`, no blocking) for the `network_requests` tool. Only requests from tabs Claude controls are kept, in memory, newest 500 per tab, with credentials in URLs replaced by `REDACTED`. |
 
 ## optional_permissions (requested only when you hand Claude a tab or turn it on)
 

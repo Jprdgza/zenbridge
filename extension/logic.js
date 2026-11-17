@@ -128,7 +128,20 @@ function zbOpenAllowed(origin, allowlist, scopes) {
   return false;
 }
 
+// network_requests shows URLs a page loaded; strip credentials that often ride in them.
+const ZB_SECRET_PARAM = /token|key|secret|auth|sig|session|passw|pwd|code|credential|jwt|bearer|otp|ticket|nonce/i;
+function zbRedactUrl(url) {
+  let u;
+  try { u = new URL(url); } catch (e) { return ""; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+  u.username = "";
+  u.password = "";
+  for (const k of [...new Set(u.searchParams.keys())]) if (ZB_SECRET_PARAM.test(k)) u.searchParams.set(k, "REDACTED");
+  if (u.hash && ZB_SECRET_PARAM.test(u.hash)) u.hash = "REDACTED";
+  return u.href.slice(0, 2048);
+}
+
 if (typeof module !== "undefined") {
   module.exports = { zbOriginOf, zbArmable, zbEntryMatches, zbInScope, zbHostPattern, zbGlobMatch,
-    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem, zbSanitizeSettings };
+    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem, zbSanitizeSettings, zbRedactUrl };
 }

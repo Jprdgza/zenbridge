@@ -6,7 +6,8 @@
 
 Let [Claude Code](https://claude.com/claude-code) drive your real, logged-in
 [Zen Browser](https://zen-browser.app) or Firefox: open tabs, read pages,
-click, type, scroll, restyle pages and take screenshots.
+click, type, fill forms, drag, upload files, read the console and network log,
+restyle pages and take screenshots.
 
 > **Unofficial.** zenbridge is a community project. It is not made by, endorsed
 > by or affiliated with Anthropic or the Zen Browser team.
@@ -26,18 +27,32 @@ Claude Code ──stdio──▶ server/zenbridge_mcp.py ──unix socket──
 |---|---|
 | `tabs_list` | Tabs Claude can see, and whether Claude is on |
 | `tab_open`, `tab_close`, `tab_switch` | Manage its own tabs |
-| `navigate`, `reload` | Go somewhere / reload |
-| `read_page` | Visible text plus up to 100 links (never form values) |
-| `screenshot` | Viewport PNG or full-page JPEG |
-| `click`, `type`, `scroll` | By CSS selector or viewport coordinates |
+| `navigate`, `reload` | Go somewhere, back or forward / reload |
+| `read_page` | Visible text plus up to 100 links |
+| `read_tree` | Accessibility tree with `ref_N` handles for each element |
+| `find` | Find elements by description ("search box", "submit button") |
+| `screenshot` | Viewport PNG, full-page JPEG, or a zoomed-in region |
+| `click` | Left, right or middle; double/triple; with modifier keys |
+| `hover`, `drag` | Open hover menus; drag and drop |
+| `type`, `key` | Type text; press keys and shortcuts (`cmd+a Backspace`, `Enter`) |
+| `form_input` | Set a select, checkbox, radio, text field or rich editor directly |
+| `scroll` | The page, or the scrollable box around an element |
+| `wait_for` | Wait (up to 10 s) for text or an element to appear or go away |
+| `file_upload` | Attach local files to a file input or drop zone |
+| `console_messages`, `network_requests` | The tab's console output and requests |
+| `resize_window` | Resize the browser window |
 | `inject_css` | Restyle a page (hide clutter, change layout); `clear` removes it |
+
+Elements can be targeted by `ref` (from `read_tree` or `find`), CSS selector or
+viewport coordinates.
 
 Claude only sees tabs it opened itself and tabs you hand to it. Everything else
 in your browser is invisible to it.
 
 What it deliberately can't do: run arbitrary JavaScript, read cookies or
-storage, read form values, type into password, one-time-code and card fields,
-or inject CSS that loads anything (`url()`, `@import`, ...), since that could leak
+storage, read or fill password, one-time-code and card fields, upload hidden
+files or anything from folders like `~/.ssh` and `~/Library/Keychains`, or
+inject CSS that loads anything (`url()`, `@import`, ...), since that could leak
 page data.
 
 While Claude works in a tab you'll see a soft purple glow, a "Claude is working
@@ -120,10 +135,16 @@ link on the Turn Claude on page):
   and URLs of the tabs you hand Claude go to the companion app on your computer
   and from there to Claude Code, which sends them to Anthropic as part of your
   conversation. That's why the add-on declares website content and browsing
-  activity at install time.
+  activity at install time. `read_tree` includes the values of ordinary form
+  fields so Claude can check what it filled in; password, one-time-code and
+  card fields are never read.
+- The console and network logs are only kept for tabs Claude can see, start
+  when Claude first asks for them, and stay in browser memory. Tokens, keys and
+  other secret-looking URL parameters are replaced with `REDACTED`.
 - Every action is logged locally to `~/Library/Logs/zenbridge/actions.jsonl`
   (`~/.local/state/zenbridge/` on Linux): time, tool, tab, URL and outcome.
-  Text Claude types and CSS it injects are recorded only as a length, and
+  Text Claude types, keys it presses, form values, uploaded file contents and
+  CSS it injects are recorded only as a length, and
   screenshots are never logged. The log rotates at 5 MB, keeping one old file.
 
 ```bash
@@ -159,7 +180,11 @@ tail -f ~/Library/Logs/zenbridge/actions.jsonl
   screenshot; switch to it and try again.
 - With go-anywhere off, screenshots are refused when cross-origin iframes are
   visible.
-- File pickers, native `<select>` popups and OS dialogs can't be driven.
+- The OS file picker, native `<select>` popups and OS dialogs can't be driven;
+  use `file_upload` and `form_input` instead.
+- Console capture starts the first time Claude asks for it, so messages logged
+  while a page first loads can be missed.
+- Uploads are limited to 10 files and 10 MB.
 - Several Claude Code sessions can share the browser, but they take turns.
 
 ## Development

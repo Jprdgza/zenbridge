@@ -31,11 +31,15 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
       create: async (p) => { calls.push(["create", p.url]); tabs[50] = { url: p.url, title: "", windowId: 1 }; return { id: 50 }; },
       remove: async (id) => { calls.push(["remove", id]); delete tabs[id]; },
       reload: async (id) => calls.push(["reload", id]),
+      goBack: async (id) => { calls.push(["goBack", id]); if (tabs[id].backTo) tabs[id].url = tabs[id].backTo; },
+      goForward: async (id) => { calls.push(["goForward", id]); if (tabs[id].forwardTo) tabs[id].url = tabs[id].forwardTo; },
       group: async (o) => { calls.push(["group", plain(o)]); return 7; },
       ungroup: async (id) => calls.push(["ungroup", id]),
       captureTab: async (id, o) => { if (hang.includes("capture")) return new Promise(() => {}); calls.push(["capture", id, plain(o)]); return o.format === "png" ? "data:image/png;base64,QUJD" : "data:image/jpeg;base64,QUJD"; },
     },
-    windows: { update: async () => {} },
+    windows: { get: async (id) => ({ id, state: "maximized" }),
+      update: async (id, p) => { calls.push(["windows.update", id, plain(p)]); return { id, width: p.width || 1, height: p.height || 1 }; } },
+    webRequest: { onBeforeRequest: ev("beforeRequest"), onCompleted: ev("completed"), onErrorOccurred: ev("netError") },
     tabGroups: { update: async (gid, p) => calls.push(["tabGroups.update", gid, plain(p)]) },
     commands: { onCommand: ev("command") },
     permissions: { onAdded: ev("permAdded"), onRemoved: ev("permRemoved"), request: (p) => { calls.push(["permissions.request", plain(p.origins)]); return Promise.resolve(grant); },
@@ -46,7 +50,7 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
       removeCSS: async ({ target, css }) => { calls.push(["removeCSS", target.tabId, css]); },
       executeScript: async ({ target, func, args }) => {
       if (hang.includes(func.name)) return new Promise(() => {});
-      calls.push(["exec", target.tabId, func.name, plain(target.frameIds)]);
+      calls.push(["exec", target.tabId, func.name, plain(target.frameIds), plain(args[0])]);
       const r = func.name === "zbShow" && !(func.name in page) ? { ok: true } : page[func.name];
       return [{ result: typeof r === "function" ? r(args[0]) : r }];
     } },
@@ -143,7 +147,8 @@ test("out-of-scope armed tab: everything but tabs_list is OUT_OF_SCOPE; only Shi
   assert.deepStrictEqual((await b.call("reload", { urlPattern: "*" })).result.reloaded, []);
   await b.click(1, true);  // Shift+click: widen
   assert.ok(b.armed().get(1).has("https://github.com"));
-  assert.strictEqual((await b.call("scroll", { tabId: 1, dy: 5 })).result.scrollY, 50);
+  const sc = (await b.call("scroll", { tabId: 1, dy: 5 })).result;
+  assert.deepStrictEqual([sc.scrollY, sc.target], [50, "page"]);  // a junk target from the page is never passed through
 });
 
 test("plain click on an out-of-scope (!!) tab disarms; never silently widens", async () => {
@@ -217,7 +222,7 @@ test("page actions inject only into frame 0 with fixed functions, origin-pinned"
   const r = await b.call("click", { tabId: 1, selector: "#go" });
   assert.strictEqual(r.result.text.length, 200);
   assert.strictEqual(r.tabUrl, "http://localhost:3000/app");
-  assert.deepStrictEqual(b.calls.filter((c) => c[0] === "exec"), [["exec", 1, "zbShow", [0]], ["exec", 1, "zbClick", [0]]]);
+  assert.deepStrictEqual(b.calls.filter((c) => c[0] === "exec").map((c) => c.slice(0, 4)), [["exec", 1, "zbShow", [0]], ["exec", 1, "zbClick", [0]]]);
 });
 
 test("hostile page results are rejected or sanitized", async () => {
@@ -489,4 +494,138 @@ test("a failing cue never breaks the action", async () => {
   const b = load({ page: { zbShow: { ok: false, code: "INTERNAL" }, zbScroll: { ok: true, scrollX: 0, scrollY: 9 } } });
   await b.click(1);
   assert.strictEqual((await b.call("scroll", { tabId: 1, dy: 9 })).result.scrollY, 9);
+});
+
+// ------------------------------------------------------------ Chrome-parity tools
+const pageOps = (byOp) => ({ zbPage: (a) => (byOp[a.op] !== undefined ? (typeof byOp[a.op] === "function" ? byOp[a.op](a) : byOp[a.op]) : { ok: true }) });
+const execs = (b, name = "zbPage") => b.calls.filter((c) => c[0] === "exec" && c[2] === name).map((c) => c[4]);
+
+test("read_tree and find: page results are size-checked; bad refs dropped; glow cue only", async () => {
+  const b = load({ page: pageOps({
+    tree: { ok: true, title: "T".repeat(500), tree: "- button \"Go\" [ref_1]", truncated: false, nodes: 3 },
+    find: { ok: true, more: true, matches: [{ ref: "ref_1", role: "button", name: "x".repeat(900), x: 1e12, y: 5, inView: 1 },
+      { ref: "javascript:1", role: "link", name: "bad", x: 0, y: 0, inView: true }] } }) });
+  await b.click(1);
+  const t = await b.call("read_tree", { tabId: 1, filter: "interactive" });
+  assert.strictEqual(t.result.title.length, 200);
+  assert.deepStrictEqual(execs(b).at(-1), { op: "tree", filter: "interactive", depth: 30, maxChars: 50000 });
+  const f = await b.call("find", { tabId: 1, query: "go button" });
+  assert.deepStrictEqual(f.result.matches.map((m) => m.ref), ["ref_1"]);
+  assert.strictEqual(f.result.matches[0].name.length, 200);
+  assert.strictEqual(f.result.matches[0].x, 1000000);
+  assert.deepStrictEqual(execs(b, "zbShow").at(-1), { kind: "glow" });
+});
+
+test("hover, key, form_input, drag: fixed page ops with a cursor on the target", async () => {
+  const b = load({ page: pageOps({ hover: { ok: true, tag: "a", text: "Menu" }, key: { ok: true, tag: "input", pressed: 2 },
+    form: { ok: true, tag: "select", kind: "evil", applied: true }, drag: { ok: true, tag: "div", text: "", html5: true } }) });
+  await b.click(1);
+  assert.deepStrictEqual((await b.call("hover", { tabId: 1, ref: "ref_4" })).result, { tag: "a", text: "Menu" });
+  assert.deepStrictEqual(execs(b, "zbShow").at(-1), { kind: "hover", ref: "ref_4" });
+  assert.strictEqual((await b.call("key", { tabId: 1, keys: "cmd+a Backspace" })).result.pressed, 2);
+  assert.deepStrictEqual(execs(b).at(-1), { op: "key", keys: "cmd+a Backspace" });
+  assert.strictEqual((await b.call("form_input", { tabId: 1, ref: "ref_2", value: "CA" })).result.kind, "text");  // unknown kind sanitized
+  const d = await b.call("drag", { tabId: 1, from: { ref: "ref_1" }, to: { x: 5, y: 6 } });
+  assert.strictEqual(d.result.html5, true);
+  const shows = execs(b, "zbShow");
+  assert.deepStrictEqual(shows.slice(-2), [{ kind: "hover", ref: "ref_1" }, { kind: "hover", x: 5, y: 6 }]);
+});
+
+test("new tools refuse unarmed tabs and out-of-scope pages like the rest", async () => {
+  const b = load({ page: pageOps({}) });
+  for (const [tool, args] of [["read_tree", {}], ["find", { query: "x" }], ["key", { keys: "a" }], ["network_requests", {}],
+    ["console_messages", {}], ["resize_window", { width: 800, height: 600 }], ["wait_for", { seconds: 0 }]]) {
+    assert.strictEqual((await b.call(tool, { tabId: 2, ...args })).error.code, "NOT_ARMED", tool);
+  }
+  assert.ok(!b.calls.some((c) => c[0] === "exec" || c[0] === "windows.update"));
+});
+
+test("navigate history, screenshot region, resize_window", async () => {
+  const metrics = { ok: true, foreignFrames: 0, scrollX: 0, scrollY: 100, vw: 1000, vh: 700, dw: 1000, dh: 5000 };
+  const b = load({ page: { zbPageMetrics: metrics } });
+  await b.click(1);
+  b.tabs[1].backTo = "http://localhost:3000/prev";
+  assert.strictEqual((await b.call("navigate", { tabId: 1, history: "back" })).result.url, "http://localhost:3000/prev");
+  assert.ok(b.calls.some((c) => c[0] === "goBack" && c[1] === 1));
+  b.tabs[1].forwardTo = "https://bank.example/accounts?acct=123";  // history may leave scope: never report that URL
+  assert.strictEqual((await b.call("navigate", { tabId: 1, history: "forward" })).result.url, "(a page outside this tab's scope)");
+  b.tabs[1].url = "http://localhost:3000/app";
+  const r = await b.call("screenshot", { tabId: 1, region: { x: 900, y: 10, width: 300, height: 50 } });
+  assert.deepStrictEqual(b.calls.find((c) => c[0] === "capture")[2], { format: "png", scale: 2, rect: { x: 900, y: 110, width: 100, height: 50 } });
+  assert.deepStrictEqual([r.result.width, r.result.height, r.result.scale], [200, 100, 2]);
+  assert.strictEqual((await b.call("screenshot", { tabId: 1, region: { x: 1000, y: 0, width: 5, height: 5 } })).error.code, "INVALID");
+  const w = await b.call("resize_window", { tabId: 1, width: 800, height: 600 });
+  assert.deepStrictEqual(w.result, { width: 800, height: 600 });
+  assert.deepStrictEqual(b.calls.filter((c) => c[0] === "windows.update").map((c) => c[2]), [{ state: "normal" }, { width: 800, height: 600 }]);
+});
+
+test("network_requests: armed tabs only, credentials redacted, nothing from out-of-scope pages, fresh log per site", async () => {
+  const b = load();
+  await b.click(1);
+  const req = (tabId, url, extra = {}) => b.on.completed({ tabId, url, method: "GET", type: "xmlhttprequest", statusCode: 200,
+    timeStamp: 5, documentUrl: "http://localhost:3000/app", ...extra });
+  b.on.beforeRequest({ tabId: 1, url: "http://localhost:3000/app", type: "main_frame" });
+  req(1, "http://localhost:3000/api?token=abc&q=1");
+  req(2, "https://bank.example/api/balance", { documentUrl: "https://bank.example/" });  // unarmed tab
+  req(1, "https://evil.example/x", { documentUrl: "https://evil.example/" });            // from an out-of-scope page
+  b.on.netError({ tabId: 1, url: "http://localhost:3000/down", method: "POST", type: "fetch", timeStamp: 6,
+    documentUrl: "http://localhost:3000/app", error: "NS_ERROR_CONNECTION_REFUSED" });
+  let r = await b.call("network_requests", { tabId: 1 });
+  assert.deepStrictEqual(r.result.requests.map((x) => x.url), ["http://localhost:3000/api?token=REDACTED&q=1", "http://localhost:3000/down"]);
+  assert.strictEqual(r.result.requests[1].error, "NS_ERROR_CONNECTION_REFUSED");
+  assert.ok(!JSON.stringify(r).includes("bank.example"));
+  r = await b.call("network_requests", { tabId: 1, urlPattern: "/down" });
+  assert.strictEqual(r.result.requests.length, 1);
+  b.on.beforeRequest({ tabId: 1, url: "http://127.0.0.1:8080/", type: "main_frame" });  // new site: log starts over
+  assert.deepStrictEqual((await b.call("network_requests", { tabId: 1 })).result.requests, []);
+  req(1, "http://127.0.0.1:8080/a", { documentUrl: "http://127.0.0.1:8080/" });
+  await b.call("network_requests", { tabId: 1, clear: true });
+  assert.deepStrictEqual((await b.call("network_requests", { tabId: 1 })).result.requests, []);
+});
+
+test("console_messages: capture starts on first call and is re-hooked after each page load", async () => {
+  const b = load({ page: pageOps({ consoleRead: (a) => ({ ok: true, capturing: true,
+    messages: [{ level: "error", text: "boom", time: 1 }, { level: "pwned", text: "x", time: 1 }] }), consoleHook: { ok: true, capturing: true } }) });
+  await b.click(1);
+  b.on.updated(1, { status: "complete" }, b.tabs[1]);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(execs(b).filter((a) => a.op === "consoleHook").length, 0);  // not before Claude asks
+  const r = await b.call("console_messages", { tabId: 1, onlyErrors: true });
+  assert.deepStrictEqual(r.result.messages, [{ level: "error", text: "boom", time: 1 }]);
+  assert.deepStrictEqual(execs(b).at(-1), { op: "consoleRead", filter: "", onlyErrors: true, clear: false, limit: 100 });
+  b.on.updated(1, { status: "complete" }, b.tabs[1]);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(execs(b).filter((a) => a.op === "consoleHook").length, 1);
+});
+
+test("file_upload: pieces are reassembled for the page; incomplete, oversized or Claude-off uploads are refused", async () => {
+  const b = load({ page: pageOps({ upload: (a) => ({ ok: true, files: a.files.length, bytes: 3, target: "input" }) }) });
+  const id = "a".repeat(32), chunk = (index, data, extra = {}) => b.call("upload_chunk",
+    { uploadId: id, index, total: 2, name: "a.txt", mimeType: "text/plain", data, ...extra });
+  assert.strictEqual((await chunk(0, "QUJD")).error.code, "NOT_ARMED");  // nothing armed, no session
+  await b.click(1);
+  assert.strictEqual((await chunk(0, "QUJD")).result.received, 1);
+  assert.strictEqual((await b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [id] })).error.code, "INVALID");  // incomplete
+  assert.strictEqual((await chunk(1, "REVG")).result.received, 2);
+  const r = await b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [id] });
+  assert.deepStrictEqual(r.result, { files: 1, bytes: 3, target: "input" });
+  assert.deepStrictEqual(execs(b).at(-1), { op: "upload", ref: "ref_1", files: [{ name: "a.txt", mimeType: "text/plain", data: "QUJDREVG" }] });
+  assert.strictEqual((await b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [id] })).error.code, "INVALID");  // used up
+  assert.strictEqual((await chunk(0, "QUJD", { name: "b.txt" })).result.received, 1);
+  assert.strictEqual((await chunk(1, "QUJD", { name: "c.txt" })).error.code, "INVALID");  // inconsistent pieces
+  const big = "A".repeat(600000);
+  const codes = [];
+  for (let i = 0; i < 30; i++) {
+    const r = await b.call("upload_chunk", { uploadId: "b".repeat(32), index: i, total: 40, name: "x", mimeType: "a/b", data: big });
+    codes.push(r.ok ? "ok" : r.error.code);
+  }
+  assert.strictEqual(codes.indexOf("REFUSED"), 25);  // 25 pieces of 600k fill the 15M-character hold exactly
+});
+
+test("wait_for: polls in the page with a timeout above its own", async () => {
+  const b = load({ page: pageOps({ wait: { ok: true, met: true, waited: 1.2 } }) });
+  await b.click(1);
+  assert.deepStrictEqual((await b.call("wait_for", { tabId: 1, text: "Saved" })).result, { met: true, waited: 1.2 });
+  assert.deepStrictEqual(execs(b).at(-1), { op: "wait", text: "Saved", gone: false, seconds: 3 });
+  assert.deepStrictEqual((await b.call("wait_for", { tabId: 1, seconds: 0 })).result, { met: true, waited: 0 });
 });

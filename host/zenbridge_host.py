@@ -96,7 +96,7 @@ def _bind_locked(path):
 
 
 LOG_MAX_BYTES = 5 * 1024 * 1024  # then actions.jsonl -> actions.jsonl.1 (one old file kept)
-REDACTED_ARGS = ("text", "css")  # what Claude typed or injected: only the length is logged
+REDACTED_ARGS = ("text", "css", "keys", "value", "data")  # typed, filled, injected or uploaded: only the length is logged
 
 
 def redact(args):
