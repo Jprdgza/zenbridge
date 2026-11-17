@@ -20,12 +20,14 @@ jobs:
   sign:
     needs: test
     runs-on: ubuntu-latest
-    # AMO_API_KEY / AMO_API_SECRET live in this environment, which only v* tags can use.
+    # Optional AMO_API_KEY / AMO_API_SECRET live in this environment, which only v* tags can use.
     environment:
       name: release
       url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     permissions:
       contents: write
+    outputs:
+      signed: ${{ steps.build.outputs.signed }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -51,33 +53,43 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Sign with addons.mozilla.org
+      - name: Sign with addons.mozilla.org, or package unsigned
+        id: build
         env:
           WEB_EXT_API_KEY: ${{ secrets.AMO_API_KEY }}
           WEB_EXT_API_SECRET: ${{ secrets.AMO_API_SECRET }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if [ -z "$WEB_EXT_API_KEY" ] || [ -z "$WEB_EXT_API_SECRET" ]; then
-            echo "::error::AMO_API_KEY and AMO_API_SECRET must be set on the release environment"
-            exit 1
+          if [ -n "$WEB_EXT_API_KEY" ] && [ -n "$WEB_EXT_API_SECRET" ]; then
+            npx --yes web-ext@8 sign --channel=unlisted --source-dir extension --artifacts-dir dist
+            mv "$(ls dist/*.xpi)" "dist/zenbridge-$VERSION.xpi"
+            echo "file=dist/zenbridge-$VERSION.xpi" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            # No AMO keys: publish the unsigned package (upload it to addons.mozilla.org to get it signed).
+            npx --yes web-ext@8 build --source-dir extension --artifacts-dir dist
+            mv "$(ls dist/*.zip)" "dist/zenbridge-$VERSION-unsigned.xpi"
+            echo "file=dist/zenbridge-$VERSION-unsigned.xpi" >> "$GITHUB_OUTPUT"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            printf '\n---\n\nThis build is **unsigned**: Zen and Firefox only install it once it is signed by addons.mozilla.org.\n' >> notes.md
           fi
-          npx --yes web-ext@8 sign --channel=unlisted --source-dir extension --artifacts-dir dist
-          xpi="$(ls dist/*.xpi)"
-          mv "$xpi" "dist/zenbridge-${{ steps.version.outputs.version }}.xpi"
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "dist/zenbridge-${{ steps.version.outputs.version }}.xpi" \
+          gh release create "$GITHUB_REF_NAME" "${{ steps.build.outputs.file }}" \
             --title "zenbridge ${{ steps.version.outputs.version }}" --notes-file notes.md --verify-tag
 
       - uses: actions/upload-artifact@v7
         with:
           name: xpi
-          path: dist/*.xpi
+          path: ${{ steps.build.outputs.file }}
 
+  # The install page only makes sense with a signed build.
   pages:
     needs: sign
+    if: needs.sign.outputs.signed == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

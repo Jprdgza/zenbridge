@@ -1,6 +1,6 @@
 # zenbridge
 
-[![Install in Zen / Firefox](https://img.shields.io/badge/Install-Zen%20%2F%20Firefox-cba6f7?style=for-the-badge&logo=firefoxbrowser&logoColor=11111b&labelColor=1e1e2e)](https://jprdgza.github.io/zenbridge/zenbridge.xpi)
+[![Install in Zen / Firefox](https://img.shields.io/badge/Install-Zen%20%2F%20Firefox-cba6f7?style=for-the-badge&logo=firefoxbrowser&logoColor=11111b&labelColor=1e1e2e)](https://github.com/Jprdgza/zenbridge/releases/latest)
 [![Latest release](https://img.shields.io/github/v/release/Jprdgza/zenbridge?style=for-the-badge&color=cba6f7&labelColor=1e1e2e)](https://github.com/Jprdgza/zenbridge/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/Jprdgza/zenbridge/ci.yml?branch=main&style=for-the-badge&label=tests&labelColor=1e1e2e)](https://github.com/Jprdgza/zenbridge/actions/workflows/ci.yml)
 
@@ -54,9 +54,10 @@ Requirements:
 - Python 3.10+ (the `python3` that ships with macOS is 3.9; `brew install python` works)
 - Claude Code
 
-1. **Install the add-on.** Click **Install** at the top of this page (or grab the
-   `.xpi` from the [latest release](https://github.com/Jprdgza/zenbridge/releases/latest)).
-   It's signed by Mozilla. If the browser asks, choose *Continue to installation*.
+1. **Install the add-on.** Click **Install** at the top of this page to get the
+   `.xpi` from the [latest release](https://github.com/Jprdgza/zenbridge/releases/latest),
+   then drag it onto `about:addons`. Zen and Firefox only install signed builds;
+   the release notes say whether a build is signed.
 
    To build your own instead, sign it as an unlisted add-on with your own
    [AMO API key](https://addons.mozilla.org/developers/addon/api/key/). An add-on ID
@@ -175,8 +176,8 @@ cd tests/js && node --test
 `python3 gen_schema.py` to regenerate `extension/schema.js` (a test checks they
 match). `extension/manifest.README.md` explains each permission.
 
-Changes per version are in [CHANGELOG.md](CHANGELOG.md). Pushing a `v*` tag signs and
-publishes a release; see [docs/releasing.md](docs/releasing.md).
+Changes per version are in [CHANGELOG.md](CHANGELOG.md). Pushing a `v*` tag publishes a
+release; see [docs/releasing.md](docs/releasing.md).
 
 ## Uninstall
 

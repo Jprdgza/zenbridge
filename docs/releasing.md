@@ -1,10 +1,13 @@
 # Releasing
 
 Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed. It runs
-the tests, signs the add-on on addons.mozilla.org (unlisted), creates a GitHub release
-with the signed `.xpi`, and deploys the install page to GitHub Pages.
+the tests and creates a GitHub release with the changelog notes and the add-on package.
 
-## One-time setup
+Without AMO keys the package is unsigned (`zenbridge-x.y.z-unsigned.xpi`); upload it to
+addons.mozilla.org to have it signed. With keys, the workflow signs it itself (unlisted),
+attaches the signed `.xpi` and deploys the install page to GitHub Pages.
+
+## Optional: sign in CI
 
 Store your AMO API credentials on the `release` environment (only `v*` tags can use it):
 

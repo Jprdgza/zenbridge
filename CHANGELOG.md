@@ -2,7 +2,7 @@
 
 Each version here is a tagged release on GitHub with a signed `.xpi`.
 
-## [1.4.0] - 2026-11-15
+## [1.4.0] - 2026-11-16
 
 First public release.
 
