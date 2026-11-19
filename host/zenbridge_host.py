@@ -100,7 +100,14 @@ REDACTED_ARGS = ("text", "css", "keys", "value", "data")  # typed, filled, injec
 
 
 def redact(args):
-    return {k: (f"<{len(v)} chars>" if k in REDACTED_ARGS and isinstance(v, str) else v) for k, v in args.items()}
+    out = {}
+    for k, v in args.items():
+        if k in REDACTED_ARGS and isinstance(v, str):
+            v = f"<{len(v)} chars>"
+        elif k == "url" and isinstance(v, str):
+            v = zbcore.redact_url(v)  # navigate / tab_open: tokens in URLs never reach the log
+        out[k] = v
+    return out
 
 
 class ActionLog:
@@ -123,7 +130,7 @@ class ActionLog:
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds"),
             "tool": tool[:64] if isinstance(tool, str) else None,
             "tabId": args.get("tabId"),
-            "url": tab_url,
+            "url": zbcore.redact_url(tab_url) if tab_url else tab_url,
             "args": args,
             "outcome": outcome,
         }

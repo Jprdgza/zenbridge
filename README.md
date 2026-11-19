@@ -159,7 +159,8 @@ link on the Turn Claude on page):
 - Every action is logged locally to `~/Library/Logs/zenbridge/actions.jsonl`
   (`~/.local/state/zenbridge/` on Linux): time, tool, tab, URL and outcome.
   Text Claude types, keys it presses, form values, uploaded file contents and
-  CSS it injects are recorded only as a length, and
+  CSS it injects are recorded only as a length, URLs are logged with tokens and
+  passwords masked, and
   screenshots are never logged. The log rotates at 5 MB, keeping one old file.
 
 ```bash

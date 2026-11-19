@@ -107,6 +107,29 @@ class LogTest(unittest.TestCase):
         self.assertEqual(b["args"]["css"], "<15 chars>")
         self.assertEqual(c["args"]["text"], "<9000 chars>")
 
+    def test_urls_in_log_are_redacted(self):
+        log = zh.ActionLog(self.path)
+        self.addCleanup(lambda: os.close(log.fd))
+        log.write("navigate", {"tabId": 1, "url": "https://user:pw@app.example/cb?code=OAUTHCODE&state=ok#access_token=TOK"}, "ok",
+                  tab_url="https://app.example/reset?token=RESETTOKEN&page=2")
+        log.write("tab_open", {"url": "https://app.example/x?Session=S3SS"}, "ok")
+        with open(self.path) as f:
+            raw = f.read()
+        for leaked in ("OAUTHCODE", "TOK", "RESETTOKEN", "S3SS", "pw@", "user:"):
+            self.assertNotIn(leaked, raw)
+        a, b = self.lines()
+        self.assertEqual(a["args"]["url"], "https://app.example/cb?code=REDACTED&state=ok#REDACTED")
+        self.assertEqual(a["url"], "https://app.example/reset?token=REDACTED&page=2")
+        self.assertEqual(b["args"]["url"], "https://app.example/x?Session=REDACTED")
+
+    def test_redact_url_rules_match_the_extension(self):
+        r = zh.zbcore.redact_url
+        self.assertEqual(r("http://[::1]:8080/a?x=1&api_key=k&q=go+on#top"), "http://[::1]:8080/a?x=1&api_key=REDACTED&q=go+on#top")
+        self.assertEqual(r("https://a.example/?pass%77ord=x"), "https://a.example/?pass%77ord=REDACTED")  # decoded name
+        self.assertEqual(r("javascript:alert(1)"), "<non-http url>")
+        self.assertEqual(len(r("https://a.example/" + "x" * 5000)), 2048)
+        self.assertIsNone(r(None))
+
     def test_log_rotates_at_the_size_cap(self):
         log = zh.ActionLog(self.path, max_bytes=2000)
         self.addCleanup(lambda: os.close(log.fd))

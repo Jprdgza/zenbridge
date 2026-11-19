@@ -116,6 +116,39 @@ class FrameError(Exception):
     pass
 
 
+# Same rules as zbRedactUrl in extension/logic.js: URLs can carry credentials (OAuth codes, reset
+# links, signed URLs), so they are masked before they are logged.
+SECRET_PARAM = re.compile(r"token|key|secret|auth|sig|session|passw|pwd|code|credential|jwt|bearer|otp|ticket|nonce", re.I)
+
+
+URL_PARTS = re.compile(r"^(https?)://([^/?#]*)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$", re.I | re.S)
+
+
+def _unquote(s):
+    return re.sub(r"%([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), s.replace("+", " "))
+
+
+def redact_url(url):
+    """url with credentials masked: userinfo dropped, secret-looking query params and fragments -> REDACTED."""
+    if not isinstance(url, str):
+        return url
+    m = URL_PARTS.match(url)
+    if not m:
+        return "<non-http url>"
+    scheme, authority, path, query, frag = m.groups()
+    host = authority.rpartition("@")[2]  # drop user:password@
+    parts = []
+    for p in query.split("&") if query else []:
+        k = p.partition("=")[0]
+        parts.append(f"{k}=REDACTED" if SECRET_PARAM.search(_unquote(k)) else p)
+    out = f"{scheme.lower()}://{host}{path}"
+    if query is not None:
+        out += "?" + "&".join(parts)
+    if frag is not None:
+        out += "#" + ("REDACTED" if frag and SECRET_PARAM.search(frag) else frag)
+    return out[:2048]
+
+
 def _read_exact(read, n):
     buf = b""
     while len(buf) < n:
