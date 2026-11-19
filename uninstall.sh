@@ -41,6 +41,35 @@ else
   echo "   'claude' not on PATH; run: claude mcp remove --scope user zenbridge"
 fi
 
+echo "== Claude desktop app MCP registration"
+case "$(uname -s)" in
+  Darwin) CLAUDE_CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json" ;;
+  *) CLAUDE_CFG="$HOME/.config/Claude/claude_desktop_config.json" ;;
+esac
+if [ -f "$CLAUDE_CFG" ] && command -v python3 >/dev/null 2>&1; then
+  python3 -I - "$CLAUDE_CFG" <<'PY' || echo "   could not edit $CLAUDE_CFG; remove mcpServers.zenbridge yourself"
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    cfg = json.load(f)
+servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
+entry = servers.get("zenbridge") if isinstance(servers, dict) else None
+if not (isinstance(entry, dict) and any(str(a).endswith("zenbridge_mcp.py") for a in entry.get("args", []))):
+    print(f"   absent: zenbridge in {path}")
+    sys.exit(0)
+del servers["zenbridge"]
+tmp = path + ".zenbridge-tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+print(f"   removed zenbridge from {path}")
+PY
+else
+  echo "   absent: $CLAUDE_CFG"
+fi
+
 echo "== socket dir and action log"
 remove_dir "$STATE"
 remove_dir "$LOGS"

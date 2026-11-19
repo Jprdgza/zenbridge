@@ -62,6 +62,37 @@ else
   echo "   claude mcp add --scope user zenbridge -- $PYTHON -I $SERVER"
 fi
 
+echo "== registering MCP server with the Claude desktop app (chats)"
+case "$(uname -s)" in
+  Darwin) CLAUDE_DESKTOP="$HOME/Library/Application Support/Claude" ;;
+  *) CLAUDE_DESKTOP="$HOME/.config/Claude" ;;
+esac
+if [ -d "$CLAUDE_DESKTOP" ]; then
+  "$PYTHON" -I - "$CLAUDE_DESKTOP/claude_desktop_config.json" "$PYTHON" "$SERVER" <<'PY' || echo "   left it alone (see above); add zenbridge under mcpServers yourself"
+import json, os, sys
+path, python, server = sys.argv[1:4]
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+except FileNotFoundError:
+    cfg = {}
+except ValueError:
+    sys.exit(f"   {path} is not valid JSON")
+if not isinstance(cfg, dict) or not isinstance(cfg.get("mcpServers", {}), dict):
+    sys.exit(f"   unexpected layout in {path}")
+cfg.setdefault("mcpServers", {})["zenbridge"] = {"command": python, "args": ["-I", server]}
+tmp = path + ".zenbridge-tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+print(f"   added zenbridge to {path}; quit and reopen the Claude app to load it")
+PY
+else
+  echo "   Claude desktop app not found; skipped"
+fi
+
 cat <<EOF
 == done
 Runtime paths created on first use by the host (not now):

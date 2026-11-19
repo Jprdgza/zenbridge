@@ -96,7 +96,9 @@ Requirements:
 
    This writes the native messaging manifest for Firefox and Zen, pins your
    `python3` in `host/launcher.sh` (override with `PYTHON=/path/to/python3`),
-   and runs `claude mcp add --scope user zenbridge ...`.
+   runs `claude mcp add --scope user zenbridge ...` for Claude Code, and adds
+   zenbridge to the Claude desktop app's `claude_desktop_config.json` so regular
+   chats there can use it too (quit and reopen the app afterwards).
 
 3. **Restart the browser.** The add-on's settings page shows "Companion app:
    connected" once everything is in place, and the toolbar button shows a
