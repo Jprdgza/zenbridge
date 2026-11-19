@@ -130,9 +130,13 @@ class ManifestGuards(unittest.TestCase):
         self.assertEqual(self.m["options_ui"], {"page": "pages/options.html", "open_in_tab": True})
 
     def test_storage_holds_only_settings(self):
+        # The settings object, plus (background only) the time Claude was turned on, for the session limit.
+        session = r'|SESSION_KEY|\{ \[SESSION_KEY\]: sessionStartedAt \}'
         for rel in ("extension/background.js", "extension/pages/options.js"):
+            allowed = r'^\s*(\{\s*settings: s\s*\}|"settings"' + (session if rel.endswith("background.js") else "") + r')\s*$'
             for m in re.finditer(r"storage\.local\.(get|set|remove)\(([^)]*)\)", read(rel)):
-                self.assertRegex(m.group(2), r'^\s*(\{\s*settings: s\s*\}|"settings")\s*$', f"{rel}: {m.group(0)}")
+                self.assertRegex(m.group(2), allowed, f"{rel}: {m.group(0)}")
+        self.assertIn('const SESSION_KEY = "sessionStartedAt";', read("extension/background.js"))
         self.assertIn("zbSanitizeSettings(raw, ZB_DEFAULTS, ZB_TUNABLE)", read("extension/background.js"))
 
     def test_data_collection_declared(self):

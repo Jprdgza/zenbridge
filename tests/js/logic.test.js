@@ -119,6 +119,8 @@ test("config defaults: safe for a stranger's first install", () => {
   const { ZB_DEFAULTS, ZB_TUNABLE } = require(path.join(EXT, "config.js"));
   assert.strictEqual(ZB_DEFAULTS.goAnywhere, false);  // go-anywhere is opt-in from the settings page
   assert.strictEqual(ZB_DEFAULTS.autoArmOpened, true);
+  assert.strictEqual(ZB_DEFAULTS.alwaysOn, false);  // ZB-3: opt-in, and sessions expire
+  assert.strictEqual(require(path.join(EXT, "config.js")).ZB_SESSION_MAX_HOURS, 8);
   assert.ok(Object.isFrozen(ZB_DEFAULTS) && Object.isFrozen(ZB_DEFAULTS.allowlist));
   assert.deepStrictEqual([...ZB_TUNABLE].sort(), Object.keys(ZB_DEFAULTS).sort());
   assert.deepStrictEqual(ZB_CONFIG.allowlist, ZB_DEFAULTS.allowlist);

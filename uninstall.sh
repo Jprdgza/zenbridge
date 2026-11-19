@@ -41,6 +41,8 @@ else
   echo "   'claude' not on PATH; run: claude mcp remove --scope user zenbridge"
 fi
 
+echo "   per-project registrations: run 'claude mcp remove zenbridge' in each project you added it to"
+
 echo "== Claude desktop app MCP registration"
 case "$(uname -s)" in
   Darwin) CLAUDE_CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json" ;;

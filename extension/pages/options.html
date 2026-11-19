@@ -16,9 +16,9 @@
   <form id="form">
     <label class="row"><input type="checkbox" name="goAnywhere">
       <span>Go anywhere<small>In tabs Claude opened or you handed it, Claude can visit any website without asking.
-        When off, it stays on the sites you hand it plus the local addresses below. Applies to tabs armed after the change.</small></span></label>
+        When off, it stays on the sites you hand it (and local addresses, in local tabs or while Claude is on). Applies to tabs armed after the change.</small></span></label>
     <label class="row"><input type="checkbox" name="alwaysOn">
-      <span>Stay on across restarts<small>After you turn Claude on once, it stays on until you press Alt+Shift+K.</small></span></label>
+      <span>Stay on across restarts<small>Keep Claude on when the browser restarts. Either way it turns itself off 8 hours after you turned it on, or when you press Alt+Shift+K. While Claude is on, any Claude session on this computer can use it.</small></span></label>
     <label class="row"><input type="checkbox" name="autoArmOpened">
       <span>Let Claude use tabs it opens<small>Tabs Claude opens are handed to it automatically (only on sites already allowed).</small></span></label>
 
@@ -30,8 +30,8 @@
     <label class="row"><span style="flex:1">Cursor pause (ms, 0-1000)<small>How long the cursor rests on its target before acting.</small>
       <input type="number" name="cursorDelayMs" min="0" max="1000" step="50"></span></label>
 
-    <h2>Always-allowed local addresses</h2>
-    <p>One per line, like <code>http://localhost:*</code> (<code>:*</code> means any port).</p>
+    <h2>Local addresses</h2>
+    <p>One per line, like <code>http://localhost:*</code> (<code>:*</code> means any port). A tab you hand Claude on one of these may use all of them; a tab on a public site never can, unless you Shift+click to add one.</p>
     <textarea name="allowlist" rows="4" spellcheck="false"></textarea>
   </form>
   <p><button id="reset" type="button">Reset to defaults</button> <span id="saved" role="status"></span></p>

@@ -3,6 +3,14 @@
 # Does NOT install the browser extension itself (that needs signing; see README).
 set -eu
 
+GLOBAL=0
+for arg in "$@"; do
+  case "$arg" in
+    --global) GLOBAL=1 ;;
+    *) echo "usage: ./install.sh [--global]" >&2; exit 2 ;;
+  esac
+done
+
 EXT_ID="zenbridge@jprdgza.github.io"
 # Python 3.10+. Override with: PYTHON=/path/to/python3 ./install.sh
 PYTHON="${PYTHON:-$(command -v python3 || true)}"
@@ -52,7 +60,11 @@ echo "$DIRS" | while IFS= read -r dir; do
   echo "   wrote $dir/zenbridge.json"
 done
 
-echo "== registering MCP server with Claude Code (user scope)"
+if [ "$GLOBAL" = 1 ]; then
+echo "== registering MCP server for EVERY project (--global)"
+echo "   Any Claude Code session (any repo, including ones you just cloned) and any Claude desktop chat"
+echo "   can then use your browser while Claude is on, and so can a prompt injection in that repo or chat."
+echo "   Per-project registration (the default) is safer."
 if command -v claude >/dev/null 2>&1; then
   claude mcp remove --scope user zenbridge >/dev/null 2>&1 || true
   claude mcp add --scope user zenbridge -- "$PYTHON" -I "$SERVER"
@@ -91,6 +103,13 @@ print(f"   added zenbridge to {path}; quit and reopen the Claude app to load it"
 PY
 else
   echo "   Claude desktop app not found; skipped"
+fi
+else
+  echo "== MCP server: register it only in the projects that need the browser (recommended)"
+  echo "   Run this inside each such project (private to you, not written into the repo):"
+  echo "   claude mcp add --scope local zenbridge -- $PYTHON -I $SERVER"
+  echo "   (--scope project instead writes .mcp.json, shared with everyone who clones the repo.)"
+  echo "   To make it available everywhere, including Claude desktop chats: ./install.sh --global"
 fi
 
 cat <<EOF

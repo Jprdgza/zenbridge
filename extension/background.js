@@ -61,8 +61,31 @@ function releaseIfIdle() {
   }).catch(ignore);
 }
 
-function setSession(on) {
+// Claude's access ends on its own sessionMaxHours after you turned it on (ZB-3). The start time is kept in
+// storage, so restarting the browser never extends a session.
+const SESSION_KEY = "sessionStartedAt";
+let sessionStartedAt = 0;
+let expiryTimer = null;
+const sessionLeftMs = () => sessionStartedAt + ZB_SESSION_MAX_HOURS * 3600000 - Date.now();
+function sessionExpired() { return session && sessionLeftMs() <= 0; }
+function scheduleExpiry() {
+  clearTimeout(expiryTimer);
+  if (!session) return;
+  // Re-check at least hourly: timers run late after the computer sleeps.
+  expiryTimer = setTimeout(() => { if (sessionExpired()) endAll(); else scheduleExpiry(); },
+    Math.max(1000, Math.min(sessionLeftMs(), 3600000)));
+}
+
+function setSession(on, startedAt) {
   session = on;
+  if (on) {
+    sessionStartedAt = startedAt || Date.now();
+    if (!startedAt) browser.storage.local.set({ [SESSION_KEY]: sessionStartedAt }).catch(ignore);
+  } else {
+    sessionStartedAt = 0;
+    browser.storage.local.remove(SESSION_KEY).catch(ignore);
+  }
+  scheduleExpiry();
   setGlobalBadge();
   releaseIfIdle();
 }
@@ -193,10 +216,19 @@ browser.commands.onCommand.addListener((name) => {
   if (name === "start-session" && !session) startSession();
 });
 // Armed tabs never survive a restart. In always-on mode the session does, if you granted it before
-// (Firefox keeps the grant); Alt+Shift+K revokes the grant, so Claude stays off until you click again.
-settingsReady.then(() => {
-  if (ZB_CONFIG.alwaysOn) return browser.permissions.contains({ origins: ["<all_urls>"] }).then(setSession, () => setSession(false));
-  setSession(false);
+// (Firefox keeps the grant) and it hasn't reached its time limit; Alt+Shift+K revokes the grant, so
+// Claude stays off until you click again. A grant with no recorded start time counts as expired.
+settingsReady.then(async () => {
+  let granted = false, started = 0;
+  if (ZB_CONFIG.alwaysOn) {
+    try {
+      granted = await browser.permissions.contains({ origins: ["<all_urls>"] });
+      started = Number((await browser.storage.local.get(SESSION_KEY))[SESSION_KEY]) || 0;
+    } catch (e) { granted = false; }
+  }
+  const age = Date.now() - started;
+  if (granted && started > 0 && age >= 0 && age < ZB_SESSION_MAX_HOURS * 3600000) setSession(true, started);
+  else setSession(false);
 });
 
 // ------------------------------------------------------------- choke point
@@ -516,6 +548,7 @@ async function handleRequest(msg) {
     if (typeof tabUrl === "string") out.tabUrl = tabUrl.slice(0, 2048);
     return out;
   };
+  if (sessionExpired()) endAll();
   const err = zbValidateRequest(ZB_SCHEMA, msg);
   if (err) return fail("INVALID", err);
   let ctx = null;

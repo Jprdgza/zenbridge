@@ -10,8 +10,10 @@ const plain = (x) => JSON.parse(JSON.stringify(x, (k, v) => (Object.prototype.to
 const manifest = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"));
 
 // Default: restricted mode (goAnywhere false). Pass goAnywhere: true for the shipped config.
-function load({ grant = true, page = {}, hasPermission = true, goAnywhere = false, alwaysOn = false, stored = undefined, hang = [] } = {}) {
+function load({ grant = true, page = {}, hasPermission = true, goAnywhere = false, alwaysOn = false, stored = undefined, hang = [],
+  sessionStartedAt = Date.now() } = {}) {
   const calls = [];
+  const kept = sessionStartedAt ? { sessionStartedAt } : {};  // storage.local besides settings
   const on = {};
   const ev = (name) => ({ addListener: (f) => { on[name] = f; } });
   const tabs = {
@@ -23,7 +25,8 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
   const browser = {
     browserAction: { onClicked: ev("click"), setBadgeText: async (o) => calls.push(["badge", o.tabId, o.text]),
       setBadgeBackgroundColor: async () => {}, setBadgeTextColor: async () => {}, setTitle: async (o) => calls.push(["title", o.tabId]) },
-    storage: { local: { get: async () => ({ settings: stored }), set: async () => {} }, onChanged: ev("storage") },
+    storage: { local: { get: async () => ({ settings: stored, ...kept }), set: async (o) => { Object.assign(kept, o); },
+      remove: async (k) => { delete kept[k]; } }, onChanged: ev("storage") },
     tabs: {
       onUpdated: ev("updated"), onRemoved: ev("removed"),
       get: async (id) => { if (!tabs[id]) throw new Error("no such tab"); return { ...tabs[id], id }; },
@@ -72,7 +75,7 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
     on.click({ ...tabs[tabId], id: tabId }, { modifiers: shift ? ["Shift"] : [], button: 0 });
     await new Promise((r) => setImmediate(r));
   };
-  return { ctx, calls, on, tabs, port, call, armed, click };
+  return { ctx, calls, on, tabs, port, call, armed, click, kept };
 }
 
 test("connects to the native host by name on startup", () => {
@@ -374,6 +377,34 @@ test("always-on: a granted session resumes at startup and a new-tab click never 
   await new Promise((r) => setImmediate(r));
   assert.strictEqual((await b.call("tabs_list", {})).result.session, false);
   assert.ok(b.calls.slice(n).some((c) => c[0] === "permissions.remove"), "kill switch revokes the grant");
+});
+
+test("sessions expire: never resumed past the limit or without a start time, and end mid-use (ZB-3)", async () => {
+  for (const sessionStartedAt of [Date.now() - 9 * 3600000, 0, Date.now() + 3600000]) {
+    const b = load({ goAnywhere: true, alwaysOn: true, sessionStartedAt });
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual((await b.call("tabs_list", {})).result.session, false, String(sessionStartedAt));
+    assert.ok(b.calls.some((c) => c[0] === "permissions.remove"), "grant released");
+  }
+  const b = load({ goAnywhere: true, alwaysOn: true, sessionStartedAt: Date.now() - 8 * 3600000 + 80 });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual((await b.call("tabs_list", {})).result.session, true);
+  await b.click(1);
+  await new Promise((r) => setTimeout(r, 120));
+  const r = await b.call("tabs_list", {});
+  assert.deepStrictEqual([r.result.session, r.result.tabs.length], [false, 0]);
+  assert.strictEqual(b.kept.sessionStartedAt, undefined);
+});
+
+test("turning Claude on records when, so a restart doesn't extend the session", async () => {
+  const b = load({ alwaysOn: true, hasPermission: false, sessionStartedAt: 0 });
+  await new Promise((r) => setImmediate(r));
+  b.on.permAdded({ origins: ["<all_urls>"] });
+  assert.ok(Math.abs(b.kept.sessionStartedAt - Date.now()) < 1000);
+});
+
+test("always-on is off by default", () => {
+  assert.strictEqual(require(path.join(EXT, "config.js")).ZB_DEFAULTS.alwaysOn, false);
 });
 
 test("always-on: without a prior grant, Claude stays off until you click", async () => {

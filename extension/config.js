@@ -3,12 +3,13 @@
 // user-tunable ones, which are saved under the single storage key "settings" and re-checked by
 // zbSanitizeSettings() (logic.js) before use. ZB_CONFIG is the live, merged copy.
 const ZB_DEFAULTS = Object.freeze({
-  // Origins added to every armed tab's scope. ":*" = any port.
+  // Local addresses: in scope for tabs armed on one of them, and openable while Claude is on. ":*" = any port.
   allowlist: Object.freeze(["http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*"]),
   // Tabs Claude opens with tab_open start armed (only on sites already allowed; see tab_open).
   autoArmOpened: true,
-  // Once you turn Claude on, it stays on across restarts until Alt+Shift+K.
-  alwaysOn: true,
+  // If true, once you turn Claude on it stays on across restarts (until Alt+Shift+K or ZB_SESSION_MAX_HOURS).
+  // Off by default: any Claude session on this computer can use the browser while Claude is on.
+  alwaysOn: false,
   // If true, every armed tab's scope is "*" (any http/https site): Claude can open, navigate
   // and act anywhere in tabs it opened or you armed. Your other tabs stay invisible.
   // Off by default: Claude then stays on the sites you hand it plus the allowlist.
@@ -20,6 +21,8 @@ const ZB_DEFAULTS = Object.freeze({
   tabGroup: true,
 });
 const ZB_TUNABLE = Object.freeze(["allowlist", "autoArmOpened", "alwaysOn", "goAnywhere", "showActivity", "cursorDelayMs", "tabGroup"]);
+// Claude's access ends by itself this long after you turned it on, restarts included. Not a setting on purpose.
+const ZB_SESSION_MAX_HOURS = 8;
 // Must match the "name" in the native messaging host manifest.
 const ZB_HOST_NAME = "zenbridge";
 const ZB_SETUP_URL = "https://github.com/Jprdgza/zenbridge#install";
@@ -28,4 +31,4 @@ const ZB_COLORS = Object.freeze({ accent: "#cba6f7", on: "#f38ba8", warn: "#f9e2
 
 const ZB_CONFIG = { ...ZB_DEFAULTS, hostName: ZB_HOST_NAME };
 
-if (typeof module !== "undefined") module.exports = { ZB_DEFAULTS, ZB_TUNABLE, ZB_CONFIG, ZB_HOST_NAME, ZB_SETUP_URL, ZB_COLORS };
+if (typeof module !== "undefined") module.exports = { ZB_DEFAULTS, ZB_TUNABLE, ZB_SESSION_MAX_HOURS, ZB_CONFIG, ZB_HOST_NAME, ZB_SETUP_URL, ZB_COLORS };

@@ -94,22 +94,35 @@ Requirements:
    cd zenbridge && ./install.sh
    ```
 
-   This writes the native messaging manifest for Firefox and Zen, pins your
-   `python3` in `host/launcher.sh` (override with `PYTHON=/path/to/python3`),
-   runs `claude mcp add --scope user zenbridge ...` for Claude Code, and adds
-   zenbridge to the Claude desktop app's `claude_desktop_config.json` so regular
-   chats there can use it too (quit and reopen the app afterwards).
+   This writes the native messaging manifest for Firefox and Zen and pins your
+   `python3` in `host/launcher.sh` (override with `PYTHON=/path/to/python3`).
+   It then prints the command to register the MCP server. Run it inside each
+   project that should be able to use the browser:
+
+   ```bash
+   claude mcp add --scope local zenbridge -- /path/to/python3 -I /path/to/zenbridge/server/zenbridge_mcp.py
+   ```
+
+   `--scope local` is private to you and that project. (`--scope project` writes
+   `.mcp.json` into the repo, so everyone who clones it gets the entry.)
+
+   `./install.sh --global` instead registers it for every Claude Code project and
+   for Claude desktop chats (quit and reopen the app afterwards). That's handier,
+   but riskier: while Claude is on, any Claude session can then drive your
+   logged-in browser, including one started in a repo you just cloned or a chat
+   reading a hostile document, and a prompt injection there can too.
 
 3. **Restart the browser.** The add-on's settings page shows "Companion app:
    connected" once everything is in place, and the toolbar button shows a
    yellow **!** if the app is missing. In Claude Code, `/mcp` should list
-   `zenbridge`.
+   `zenbridge` in the projects where you registered it.
 
 ## Using it
 
 - **Turn Claude on:** click the zenbridge toolbar button on a new tab (or press
   **Alt+Shift+C**), then click **Turn Claude on** and allow the prompt. The
-  button gets an **AI** badge, and Claude can open and drive its own tabs.
+  button gets an **AI** badge, and Claude can open and drive its own tabs. It
+  turns itself off after 8 hours.
 - **Hand Claude one of your tabs:** click the toolbar button on that tab (**ON**
   badge). Click again to take it back. Handed-over tabs reset when the browser
   restarts.
@@ -124,7 +137,7 @@ link on the Turn Claude on page):
 | Setting | Default | |
 |---|---|---|
 | Go anywhere | off | Let Claude visit any site in its tabs. When off, it stays on the sites you hand it. |
-| Stay on across restarts | on | After you turn Claude on once, it stays on until Alt+Shift+K. |
+| Stay on across restarts | off | Keep Claude on when the browser restarts. Either way it turns itself off 8 hours after you turned it on, or with Alt+Shift+K. |
 | Let Claude use tabs it opens | on | Tabs Claude opens are handed to it automatically, on allowed sites only. |
 | Show activity | on | Glow, cursor and highlight while Claude works. |
 | Group Claude's tabs | on | Keep Claude's tabs in a "Claude" tab group. |
