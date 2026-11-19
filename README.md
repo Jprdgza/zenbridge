@@ -50,8 +50,8 @@ Claude only sees tabs it opened itself and tabs you hand to it. Everything else
 in your browser is invisible to it.
 
 What it deliberately can't do: run arbitrary JavaScript, read cookies or
-storage, read or fill password, one-time-code and card fields, upload hidden
-files or anything from folders like `~/.ssh` and `~/Library/Keychains`, or
+storage, read or fill password, one-time-code and card fields, upload files
+from anywhere but the project folder, `~/Downloads` and `~/Desktop`, or
 inject CSS that loads anything (`url()`, `@import`, ...), since that could leak
 page data.
 
@@ -186,7 +186,11 @@ tail -f ~/Library/Logs/zenbridge/actions.jsonl
   use `file_upload` and `form_input` instead.
 - Console capture starts the first time Claude asks for it, so messages logged
   while a page first loads can be missed.
-- Uploads are limited to 10 files and 10 MB.
+- Uploads are limited to 10 files and 10 MB, from the folder Claude Code runs in,
+  `~/Downloads` or `~/Desktop`. Add folders with `ZENBRIDGE_UPLOAD_DIRS`
+  (`:`-separated), e.g. `claude mcp add -e ZENBRIDGE_UPLOAD_DIRS=/path/one:/path/two ...`.
+  Hidden files, `~/Library`, `/private`, `/System`, `/Library`, `/var`, and browser
+  password, cookie and keychain files are always refused.
 - Several Claude Code sessions can share the browser, but they take turns.
 
 ## Development

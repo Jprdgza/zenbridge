@@ -39,7 +39,13 @@ PUBLIC_TOOLS = {name: t for name, t in zbcore.TOOLS.items() if not t.get("x-inte
 UPLOAD_PIECE = 600000      # base64 characters per upload_chunk (a multiple of 4)
 UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 HOME = os.path.expanduser("~")
-UPLOAD_DENIED = [os.path.join(HOME, "Library", d) for d in ("Keychains", "Cookies", "Mail", "Messages")] + ["/etc", "/private/etc"]
+# Uploads come only from these folders (plus ZENBRIDGE_UPLOAD_DIRS, separated by ":"): Claude decides what to
+# upload, and page content may try to talk it into sending something private.
+UPLOAD_DEFAULT_DIRS = [os.path.join(HOME, "Downloads"), os.path.join(HOME, "Desktop")]
+# Never uploaded, even inside an allowed folder. /etc, /tmp and /var resolve into /private on macOS.
+UPLOAD_FORBIDDEN_DIRS = [os.path.join(HOME, "Library"), "/private", "/System", "/Library", "/var", "/etc"]
+UPLOAD_FORBIDDEN_NAMES = {"key4.db", "logins.json", "cookies.sqlite", "login data", "cookies"}
+UPLOAD_FORBIDDEN_SUFFIXES = (".keychain-db", ".keychain")
 
 
 def tool_definitions():
@@ -47,13 +53,58 @@ def tool_definitions():
             for name, t in PUBLIC_TOOLS.items()]
 
 
+def _dir_key(path):
+    """(device, inode) of a directory, or None. Compares like the filesystem does, whatever the letter case."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino) if os.path.isdir(path) else None
+
+
+def _parents(real):
+    """Every folder above a resolved path, nearest first, ending with "/"."""
+    out, d = [], os.path.dirname(real)
+    while True:
+        out.append(d)
+        up = os.path.dirname(d)
+        if up == d:
+            return out
+        d = up
+
+
+def upload_roots():
+    """Folders Claude may upload from: the server's working directory, ~/Downloads, ~/Desktop and
+    ZENBRIDGE_UPLOAD_DIRS. A root that is "/", your home folder or above it is ignored as too broad."""
+    extra = [d for d in os.environ.get("ZENBRIDGE_UPLOAD_DIRS", "").split(os.pathsep) if d.strip()]
+    too_broad = {_dir_key(d) for d in [HOME] + _parents(os.path.join(os.path.realpath(HOME), "x"))} - {None}
+    roots = []
+    for d in [os.getcwd()] + UPLOAD_DEFAULT_DIRS + extra:
+        if not os.path.isabs(d):
+            continue
+        key = _dir_key(os.path.realpath(d))
+        if key and key not in too_broad and key not in roots:
+            roots.append(key)
+    return roots
+
+
 def read_upload(path):
     """(name, bytes) for a file Claude may upload, or raise ValueError with the reason."""
     real = os.path.realpath(path)
     if any(part.startswith(".") for part in real.split(os.sep) if part):
         raise ValueError("hidden files and folders (like ~/.ssh) can't be uploaded")
-    if any(real == d or real.startswith(d + os.sep) for d in UPLOAD_DENIED):
-        raise ValueError("files in that folder can't be uploaded")
+    name = os.path.basename(real)
+    low = name.lower()
+    if low in UPLOAD_FORBIDDEN_NAMES or low.endswith(UPLOAD_FORBIDDEN_SUFFIXES):
+        raise ValueError("browser password, cookie and keychain files can't be uploaded")
+    parents = [k for k in (_dir_key(d) for d in _parents(real)) if k]
+    forbidden = {_dir_key(os.path.realpath(d)) for d in UPLOAD_FORBIDDEN_DIRS} - {None}
+    forbidden |= {_dir_key(d) for d in UPLOAD_FORBIDDEN_DIRS} - {None}
+    if any(k in forbidden for k in parents):
+        raise ValueError("files in system and app-data folders (~/Library, /private, /System, ...) can't be uploaded")
+    if not any(k in parents for k in upload_roots()):
+        raise ValueError("only files in the project folder, ~/Downloads or ~/Desktop can be uploaded "
+                         "(add folders with ZENBRIDGE_UPLOAD_DIRS)")
     try:
         st = os.stat(real)
     except OSError:
@@ -63,7 +114,10 @@ def read_upload(path):
     if st.st_size > UPLOAD_MAX_BYTES:
         raise ValueError("file is larger than 10 MB")
     with open(real, "rb") as f:
-        return os.path.basename(real)[:255], f.read(UPLOAD_MAX_BYTES + 1)
+        now = os.fstat(f.fileno())
+        if (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino):  # swapped after the checks above
+            raise ValueError("file changed while it was being checked")
+        return name[:255], f.read(UPLOAD_MAX_BYTES + 1)
 
 
 def upload(bridge, args):

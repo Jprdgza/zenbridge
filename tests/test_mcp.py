@@ -3,7 +3,10 @@ import json
 import os
 import re
 import subprocess
+import sys
+import tempfile
 import unittest
+from unittest import mock
 
 from helpers import PY, ROOT, short_tmpdir
 import zbcore
@@ -42,9 +45,19 @@ class UploadBridge:
         return {"v": 1, "id": "a" * 32, "ok": True, "result": result}
 
 
+def allowed_dir(testcase):
+    """A folder outside /tmp (which is /private/tmp, never uploadable on macOS), added to the allowed folders."""
+    d = tempfile.mkdtemp(prefix="zbup", dir=ROOT)
+    testcase.addCleanup(__import__("shutil").rmtree, d, True)
+    env = mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": d})
+    env.start()
+    testcase.addCleanup(env.stop)
+    return d
+
+
 class UploadTest(unittest.TestCase):
     def setUp(self):
-        self.dir = short_tmpdir(self)
+        self.dir = allowed_dir(self)
 
     def file(self, name, data):
         path = os.path.join(self.dir, name)
@@ -87,6 +100,43 @@ class UploadTest(unittest.TestCase):
             r = self.call({"tabId": 1, "ref": "ref_1", "paths": [path]}, b)
             self.assertTrue(r.get("isError"), path)
             self.assertEqual(b.calls, [], path)
+
+    def test_only_allowed_folders(self):
+        outside = tempfile.mkdtemp(prefix="zbout", dir=ROOT)  # not in ZENBRIDGE_UPLOAD_DIRS, not the cwd
+        self.addCleanup(__import__("shutil").rmtree, outside, True)
+        path = os.path.join(outside, "report.pdf")
+        with open(path, "wb") as f:
+            f.write(b"x")
+        with mock.patch.object(mcp.os, "getcwd", return_value="/"):
+            with self.assertRaisesRegex(ValueError, "only files in the project folder"):
+                mcp.read_upload(path)
+            with mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": outside}):
+                self.assertEqual(mcp.read_upload(path)[0], "report.pdf")
+
+    def test_credential_files_refused_even_in_allowed_folders(self):
+        for name in ("logins.json", "key4.db", "cookies.sqlite", "Login Data", "Cookies", "COOKIES", "login.keychain-db"):
+            path = self.file(name, b"x")
+            with self.assertRaisesRegex(ValueError, "password, cookie and keychain", msg=name):
+                mcp.read_upload(path)
+
+    def test_too_broad_roots_ignored(self):
+        home = mcp._dir_key(mcp.HOME)
+        with mock.patch.object(mcp.os, "getcwd", return_value="/"), \
+                mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": os.pathsep.join([mcp.HOME, "/", "relative/dir"])}):
+            roots = mcp.upload_roots()
+        self.assertNotIn(home, roots)
+        self.assertNotIn(mcp._dir_key("/"), roots)
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS folders")
+    def test_system_folders_refused_in_any_letter_case(self):
+        prefs = os.path.join(mcp.HOME, "library", "preferences", ".GlobalPreferences.plist")
+        for path in (os.path.join(mcp.HOME, "LIBRARY", "Preferences", "com.apple.dock.plist"), "/private/ETC/hosts",
+                     "/ETC/hosts", "/tmp/x", "/system/library/CoreServices/SystemVersion.plist"):
+            with mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": "/private/tmp"}):
+                with self.assertRaisesRegex(ValueError, "system and app-data folders", msg=path):
+                    mcp.read_upload(path)
+        with self.assertRaises(ValueError):
+            mcp.read_upload(prefs)
 
     def test_size_limit(self):
         b = UploadBridge()
