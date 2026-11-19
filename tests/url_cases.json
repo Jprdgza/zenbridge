@@ -1,0 +1,13 @@
+[
+  ["https://a.example/api?token=abc&q=1", "https://a.example/api?token=REDACTED&q=1"],
+  ["https://a.example/reset/8f3a9c2e7b1d4f6a8c0e2b4d6f8a0c2e", "https://a.example/reset/REDACTED"],
+  ["https://a.example/invite/123e4567-e89b-12d3-a456-426614174000?k=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5", "https://a.example/invite/REDACTED?k=REDACTED"],
+  ["https://a.example/blog/my-blog-post-about-things-2024?page=2&t=eyJhbGciOiJIUzI1NiJ9.e30.x", "https://a.example/blog/my-blog-post-about-things-2024?page=2&t=REDACTED"],
+  ["https://a.example/cb#abcDEF1234567890ghiJKL", "https://a.example/cb#REDACTED"],
+  ["https://a.example/cb#state=ok&x=eyJhbGciOiJub25lIn0", "https://a.example/cb#REDACTED"],
+  ["https://a.example/s/aGVsbG8td29ybGQtMTIzNDU2Nzg5MA==/file.pdf", "https://a.example/s/REDACTED/file.pdf"],
+  ["https://a.example/users/42/orders/20241118?sort=created_at", "https://a.example/users/42/orders/20241118?sort=created_at"],
+  ["https://a.example/docs/getting-started#installation", "https://a.example/docs/getting-started#installation"],
+  ["https://a.example/assets/app.3f9a1c.js", "https://a.example/assets/app.3f9a1c.js"],
+  ["http://localhost:3000/app?h=deadbeef0123456789abcdef&n=5", "http://localhost:3000/app?h=REDACTED&n=5"]
+]

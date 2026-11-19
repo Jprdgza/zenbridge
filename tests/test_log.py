@@ -1,12 +1,13 @@
 import fcntl
 import io
 import json
+import subprocess
 import os
 import stat
 import unittest
 from unittest import mock
 
-from helpers import rid, short_tmpdir
+from helpers import ROOT, rid, short_tmpdir
 import zenbridge_host as zh
 
 
@@ -129,6 +130,15 @@ class LogTest(unittest.TestCase):
         self.assertEqual(r("javascript:alert(1)"), "<non-http url>")
         self.assertEqual(len(r("https://a.example/" + "x" * 5000)), 2048)
         self.assertIsNone(r(None))
+
+    def test_redact_url_matches_the_extension_on_shared_cases(self):
+        cases = json.load(open(os.path.join(ROOT, "tests", "url_cases.json")))
+        js = ("const L = require(process.argv[1]); const c = JSON.parse(require('fs').readFileSync(0, 'utf8'));"
+              "process.stdout.write(JSON.stringify(c.map(([u]) => L.zbRedactUrl(u))));")
+        out = subprocess.run(["node", "-e", js, os.path.join(ROOT, "extension", "logic.js")], input=json.dumps(cases),
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(out.stdout), [want for _, want in cases])           # extension (network log)
+        self.assertEqual([zh.zbcore.redact_url(u) for u, _ in cases], [want for _, want in cases])  # host (action log)
 
     def test_log_rotates_at_the_size_cap(self):
         log = zh.ActionLog(self.path, max_bytes=2000)

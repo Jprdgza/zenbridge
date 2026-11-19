@@ -119,8 +119,6 @@ class FrameError(Exception):
 # Same rules as zbRedactUrl in extension/logic.js: URLs can carry credentials (OAuth codes, reset
 # links, signed URLs), so they are masked before they are logged.
 SECRET_PARAM = re.compile(r"token|key|secret|auth|sig|session|passw|pwd|code|credential|jwt|bearer|otp|ticket|nonce", re.I)
-
-
 URL_PARTS = re.compile(r"^(https?)://([^/?#]*)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$", re.I | re.S)
 
 
@@ -128,8 +126,24 @@ def _unquote(s):
     return re.sub(r"%([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), s.replace("+", " "))
 
 
+def secret_value(v):
+    """True for values that look like tokens: JWTs, long hex/UUIDs, long random base64 (not word slugs)."""
+    if not isinstance(v, str) or len(v) < 10:
+        return False
+    if re.match(r"eyJ[A-Za-z0-9_-]{6,}", v):
+        return True
+    if len(v) < 20:
+        return False
+    if re.fullmatch(r"[0-9a-fA-F-]+", v) and len(v.replace("-", "")) >= 16 and re.search(r"[0-9]", v):
+        return True
+    if not re.fullmatch(r"[A-Za-z0-9_\-+/=.~%]+", v) or not re.search(r"[A-Za-z]", v) or not re.search(r"[0-9]", v):
+        return False
+    return any(len(run) >= 16 for run in re.findall(r"[A-Za-z0-9]+", v))
+
+
 def redact_url(url):
-    """url with credentials masked: userinfo dropped, secret-looking query params and fragments -> REDACTED."""
+    """url with credentials masked: userinfo dropped; secret-named query params and secret-looking path
+    segments, query values and fragments -> REDACTED."""
     if not isinstance(url, str):
         return url
     m = URL_PARTS.match(url)
@@ -137,15 +151,17 @@ def redact_url(url):
         return "<non-http url>"
     scheme, authority, path, query, frag = m.groups()
     host = authority.rpartition("@")[2]  # drop user:password@
+    path = "/".join("REDACTED" if secret_value(_unquote(seg)) else seg for seg in path.split("/"))
     parts = []
     for p in query.split("&") if query else []:
-        k = p.partition("=")[0]
-        parts.append(f"{k}=REDACTED" if SECRET_PARAM.search(_unquote(k)) else p)
+        k, _, v = p.partition("=")
+        parts.append(f"{k}=REDACTED" if SECRET_PARAM.search(_unquote(k)) or secret_value(_unquote(v)) else p)
     out = f"{scheme.lower()}://{host}{path}"
     if query is not None:
         out += "?" + "&".join(parts)
     if frag is not None:
-        out += "#" + ("REDACTED" if frag and SECRET_PARAM.search(frag) else frag)
+        hidden = frag and (SECRET_PARAM.search(frag) or any(secret_value(_unquote(p)) for p in re.split(r"[&=/?]", frag)))
+        out += "#" + ("REDACTED" if hidden else frag)
     return out[:2048]
 
 

@@ -228,3 +228,13 @@ test("zbCssProblem: plain styling passes, anything that could fetch or hide a fe
     assert.notStrictEqual(L.zbCssProblem(bad), null, bad);
   }
 });
+
+test("zbRedactUrl / zbSecretValue: tokens masked, slugs and ids kept (ZB-5)", () => {
+  for (const [url, want] of JSON.parse(fs.readFileSync(path.join(__dirname, "..", "url_cases.json"), "utf8"))) {
+    assert.strictEqual(L.zbRedactUrl(url), want, url);
+  }
+  assert.strictEqual(L.zbRedactUrl("https://u:p@a.example/"), "https://a.example/");
+  assert.strictEqual(L.zbRedactUrl("javascript:alert(1)"), "");
+  for (const v of ["eyJhbGciOi", "0123456789abcdef0123", "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5"]) assert.ok(L.zbSecretValue(v), v);
+  for (const v of ["my-blog-post-about-things-2024", "created_at", "20241118", "getting-started", "", null]) assert.ok(!L.zbSecretValue(v), String(v));
+});

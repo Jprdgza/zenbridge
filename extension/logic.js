@@ -132,20 +132,37 @@ function zbOpenAllowed(origin, openable, scopes) {
   return false;
 }
 
-// network_requests shows URLs a page loaded; strip credentials that often ride in them.
+// network_requests shows URLs a page loaded, and the host logs URLs: strip credentials that often ride in
+// them. Masked: user:password, query params with a secret-sounding name, and any path segment, query value
+// or fragment that looks like a token (ZB-5). common/zbcore.py:redact_url applies the same rules.
 const ZB_SECRET_PARAM = /token|key|secret|auth|sig|session|passw|pwd|code|credential|jwt|bearer|otp|ticket|nonce/i;
+function zbSecretValue(v) {
+  if (typeof v !== "string" || v.length < 10) return false;
+  if (/^eyJ[A-Za-z0-9_-]{6,}/.test(v)) return true;  // JWT
+  if (v.length < 20) return false;
+  if (/^[0-9a-f-]+$/i.test(v) && v.replace(/-/g, "").length >= 16 && /[0-9]/.test(v)) return true;  // hex, UUID
+  if (!/^[A-Za-z0-9_\-+/=.~%]+$/.test(v) || !/[A-Za-z]/.test(v) || !/[0-9]/.test(v)) return false;
+  return (v.match(/[A-Za-z0-9]+/g) || []).some((run) => run.length >= 16);  // base64 / random; not word slugs
+}
+function zbDecode(s) {
+  try { return decodeURIComponent(s.replace(/\+/g, " ")); } catch (e) { return s; }
+}
 function zbRedactUrl(url) {
   let u;
   try { u = new URL(url); } catch (e) { return ""; }
   if (u.protocol !== "http:" && u.protocol !== "https:") return "";
   u.username = "";
   u.password = "";
-  for (const k of [...new Set(u.searchParams.keys())]) if (ZB_SECRET_PARAM.test(k)) u.searchParams.set(k, "REDACTED");
-  if (u.hash && ZB_SECRET_PARAM.test(u.hash)) u.hash = "REDACTED";
+  u.pathname = u.pathname.split("/").map((seg) => (zbSecretValue(zbDecode(seg)) ? "REDACTED" : seg)).join("/");
+  for (const k of [...new Set(u.searchParams.keys())]) {
+    if (ZB_SECRET_PARAM.test(k) || u.searchParams.getAll(k).some(zbSecretValue)) u.searchParams.set(k, "REDACTED");
+  }
+  const frag = u.hash.slice(1);
+  if (frag && (ZB_SECRET_PARAM.test(frag) || frag.split(/[&=/?]/).some((p) => zbSecretValue(zbDecode(p))))) u.hash = "REDACTED";
   return u.href.slice(0, 2048);
 }
 
 if (typeof module !== "undefined") {
   module.exports = { zbOriginOf, zbArmable, zbEntryMatches, zbInScope, zbHostPattern, zbGlobMatch,
-    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem, zbSanitizeSettings, zbRedactUrl };
+    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem, zbSanitizeSettings, zbRedactUrl, zbSecretValue };
 }

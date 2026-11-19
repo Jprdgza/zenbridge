@@ -154,8 +154,10 @@ link on the Turn Claude on page):
   fields so Claude can check what it filled in; password, one-time-code and
   card fields are never read.
 - The console and network logs are only kept for tabs Claude can see, start
-  when Claude first asks for them, and stay in browser memory. Tokens, keys and
-  other secret-looking URL parameters are replaced with `REDACTED`.
+  when Claude first asks for them, and stay in browser memory. URL parameters
+  with secret-sounding names, and path segments, values and fragments that look
+  like tokens (JWTs, long hex or UUIDs, long random strings), are replaced with
+  `REDACTED`.
 - Every action is logged locally to `~/Library/Logs/zenbridge/actions.jsonl`
   (`~/.local/state/zenbridge/` on Linux): time, tool, tab, URL and outcome.
   Text Claude types, keys it presses, form values, uploaded file contents and
