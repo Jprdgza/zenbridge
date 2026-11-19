@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "zenbridge",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Unofficial: lets a local Claude Code session drive browser tabs you hand it, through a companion app on your computer. Not affiliated with Anthropic.",
   "browser_specific_settings": {
     "gecko": {
