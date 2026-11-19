@@ -146,7 +146,7 @@ browser.browserAction.onClicked.addListener((tab, info) => {
     if (!session) startSession(tab.id); else if (!ZB_CONFIG.alwaysOn) endAll();
     return;
   }
-  const extra = decision === "arm" ? ZB_CONFIG.allowlist.map(zbHostPattern) : [];
+  const extra = decision === "arm" && zbInScope(ZB_CONFIG.allowlist, origin) ? ZB_CONFIG.allowlist.map(zbHostPattern) : [];
   // permissions.request must be the first call in the click handler (user gesture).
   // <all_urls> is needed by tabs.captureTab.
   browser.permissions.request({ origins: [...new Set([zbHostPattern(origin), ...extra, "<all_urls>"])] }).then((granted) => {
@@ -284,9 +284,12 @@ const TOOLS = {
   },
   async tab_open(a) {
     const origin = zbOriginOf(a.url);
-    if (!zbOpenAllowed(origin, ZB_CONFIG.goAnywhere ? ["*"] : ZB_CONFIG.allowlist, armed.values())) {
+    // Local addresses only while Claude is on (a session the user started), so a tab handed over on a
+    // public site can't be used to reach them; otherwise only origins an armed tab already has.
+    const openable = ZB_CONFIG.goAnywhere ? ["*"] : session ? ZB_CONFIG.allowlist : [];
+    if (!zbOpenAllowed(origin, openable, armed.values())) {
       throw new ZbError("OUT_OF_SCOPE", ZB_CONFIG.goAnywhere ? "this site cannot be opened (add-on store)"
-        : "tab_open is limited to the dev allowlist and origins already in an armed tab's scope");
+        : "tab_open is limited to origins already in an armed tab's scope, plus local addresses while Claude is on");
     }
     const tab = await browser.tabs.create({ url: a.url, active: true });
     let isArmed = false;

@@ -123,13 +123,13 @@ link on the Turn Claude on page):
 
 | Setting | Default | |
 |---|---|---|
-| Go anywhere | off | Let Claude visit any site in its tabs. When off, it stays on sites you hand it plus the local addresses. |
+| Go anywhere | off | Let Claude visit any site in its tabs. When off, it stays on the sites you hand it. |
 | Stay on across restarts | on | After you turn Claude on once, it stays on until Alt+Shift+K. |
 | Let Claude use tabs it opens | on | Tabs Claude opens are handed to it automatically, on allowed sites only. |
 | Show activity | on | Glow, cursor and highlight while Claude works. |
 | Group Claude's tabs | on | Keep Claude's tabs in a "Claude" tab group. |
 | Cursor pause | 200 ms | How long the cursor rests on its target before acting. |
-| Local addresses | localhost, 127.0.0.1, [::1] | Always allowed, any port. |
+| Local addresses | localhost, 127.0.0.1, [::1] | Any port. A tab you hand Claude on one of these may use all of them, and Claude can open them while it's on. A tab on a public site never can, unless you Shift+click to add one, so a page there can't steer Claude into your dev servers. |
 
 ## Privacy
 

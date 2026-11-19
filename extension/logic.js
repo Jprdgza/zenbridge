@@ -115,15 +115,19 @@ function zbSanitizeSettings(raw, defaults, tunable) {
   return out;
 }
 
-// Scope given to a newly armed tab.
+// Scope given to a newly armed tab. Only a tab on a local (allowlisted) address gets the rest of the
+// allowlist: a public page must not be able to steer Claude into your local services (ZB-2).
+// Shift+click on the badge still adds an origin to one tab by hand.
 function zbNewScope(origin, config) {
-  return new Set(config.goAnywhere ? ["*"] : [origin, ...config.allowlist]);
+  if (config.goAnywhere) return new Set(["*"]);
+  return new Set(zbInScope(config.allowlist, origin) ? [origin, ...config.allowlist] : [origin]);
 }
 
-// tab_open may only target the allowlist or an origin some armed tab already has in scope.
-function zbOpenAllowed(origin, allowlist, scopes) {
+// tab_open may only target `openable` (the allowlist while Claude is on, ["*"] in go-anywhere mode, else
+// nothing) or an origin some armed tab already has in scope.
+function zbOpenAllowed(origin, openable, scopes) {
   if (!origin || ZB_REFUSED_HOSTS.includes(new URL(origin).hostname)) return false;
-  if (zbInScope(allowlist, origin)) return true;
+  if (zbInScope(openable, origin)) return true;
   for (const s of scopes) if (zbInScope(s, origin)) return true;
   return false;
 }

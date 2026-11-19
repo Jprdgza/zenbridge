@@ -111,6 +111,8 @@ test("tab_open allowance", () => {
   assert.ok(L.zbOpenAllowed("https://app.example.com", ZB_CONFIG.allowlist, scopes));
   assert.ok(!L.zbOpenAllowed("https://attacker.example", ZB_CONFIG.allowlist, scopes));
   assert.ok(!L.zbOpenAllowed(null, ZB_CONFIG.allowlist, scopes));
+  assert.ok(!L.zbOpenAllowed("http://localhost:4000", [], scopes));  // Claude off: local only via an armed local tab
+  assert.ok(L.zbOpenAllowed("http://localhost:4000", [], [new Set(["http://localhost:*"])]));
 });
 
 test("config defaults: safe for a stranger's first install", () => {
@@ -188,7 +190,10 @@ test("go-anywhere scope", () => {
   assert.ok(L.zbInScope(new Set(["*"]), "https://anything.example"));
   assert.ok(!L.zbInScope(new Set(["*"]), null));  // unreadable / non-http pages never match
   assert.deepStrictEqual([...L.zbNewScope("https://a.example", { goAnywhere: true, allowlist: ["http://localhost:*"] })], ["*"]);
-  assert.deepStrictEqual([...L.zbNewScope("https://a.example", { goAnywhere: false, allowlist: ["http://localhost:*"] })], ["https://a.example", "http://localhost:*"]);
+  // ZB-2: a public tab gets only its own origin; a local tab gets the local allowlist
+  assert.deepStrictEqual([...L.zbNewScope("https://a.example", { goAnywhere: false, allowlist: ["http://localhost:*"] })], ["https://a.example"]);
+  assert.deepStrictEqual([...L.zbNewScope("http://localhost:3000", { goAnywhere: false, allowlist: ["http://localhost:*", "http://127.0.0.1:*"] })],
+    ["http://localhost:3000", "http://localhost:*", "http://127.0.0.1:*"]);
   assert.ok(!L.zbOpenAllowed("https://addons.mozilla.org", ["*"], []));
   assert.ok(L.zbOpenAllowed("https://www.wikipedia.org", ["*"], []));
 });

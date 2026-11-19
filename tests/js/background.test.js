@@ -202,15 +202,29 @@ test("tab_open auto-arms tabs on approved sites (localhost, or a site the user a
   await b.click(3);  // user arms github.com
   const r = await b.call("tab_open", { url: "https://github.com/settings" });
   assert.deepStrictEqual([r.result.armed, r.result.tabId], [true, 50]);
-  assert.deepStrictEqual(plain(b.armed().get(50)), ["https://github.com", "http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*"]);
+  assert.deepStrictEqual(plain(b.armed().get(50)), ["https://github.com"]);  // ZB-2: no localhost in a public tab's scope
   assert.ok((await b.call("scroll", { tabId: 50, dy: 1 })).ok);  // usable immediately
   assert.ok(b.calls.some((c) => c[0] === "badge" && c[1] === 50 && c[2] === "ON"));
+  assert.strictEqual((await b.call("navigate", { tabId: 50, url: "http://localhost:8888/" })).error.code, "OUT_OF_SCOPE");
+  assert.strictEqual((await b.call("tab_open", { url: "http://localhost:5173/" })).error.code, "OUT_OF_SCOPE");
+  await b.click(1);  // the user arms a localhost tab: local addresses are now in scope for it and openable
+  assert.deepStrictEqual(plain(b.armed().get(1)), ["http://localhost:3000", "http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*"]);
   const local = await b.call("tab_open", { url: "http://localhost:5173/" });
   assert.strictEqual(local.result.armed, true);
 });
 
+test("public tab: Shift+click still widens it to a local address by hand (ZB-2)", async () => {
+  const b = load();
+  await b.click(3);
+  b.tabs[3].url = "http://localhost:3000/app";
+  assert.strictEqual((await b.call("read_page", { tabId: 3 })).error.code, "OUT_OF_SCOPE");
+  await b.click(3, true);
+  assert.deepStrictEqual(plain(b.armed().get(3)), ["https://github.com", "http://localhost:3000"]);
+});
+
 test("tab_open without any granted permission opens an UNARMED tab", async () => {
   const b = load({ hasPermission: false });
+  await b.click(1);  // arming makes localhost openable; the grant is then missing (e.g. revoked in about:addons)
   const r = await b.call("tab_open", { url: "http://localhost:5173/" });
   assert.deepStrictEqual([r.result.armed, r.result.tabId], [false, 50]);
   assert.strictEqual((await b.call("click", { tabId: 50, selector: "a" })).error.code, "NOT_ARMED");
