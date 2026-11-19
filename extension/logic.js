@@ -76,7 +76,7 @@ function zbBadge(scope, url) {
 // Typing is refused into password, one-time-code and credit-card fields (also when a
 // password field was toggled to type=text but kept its autocomplete or name).
 const ZB_SENSITIVE_AC = ["current-password", "new-password", "one-time-code"];
-const ZB_SENSITIVE_NAME = /pass(word|wd|code)|pwd|otp|cvc|cvv|card.?num/i;
+const ZB_SENSITIVE_NAME = /pass(word|wd|code)|pwd|otp|cvc|cvv|card.?num|api.?key|secret|token|(?:^|[^a-z])ssn(?:[^a-z]|$)|social.?sec/i;
 function zbIsSensitiveField(tag, type, autocomplete, nameAndId) {
   if (String(tag).toLowerCase() === "input" && String(type).toLowerCase() === "password") return true;
   const tokens = String(autocomplete || "").toLowerCase().split(/\s+/);

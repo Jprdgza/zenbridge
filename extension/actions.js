@@ -105,7 +105,7 @@ function zbType(a, expectedOrigin) {
   const nameAndId = `${el.getAttribute("name") || ""} ${el.getAttribute("id") || ""}`;
   if ((tag === "input" && String(el.type).toLowerCase() === "password") ||
       acTokens.some((t) => t.startsWith("cc-") || ["current-password", "new-password", "one-time-code"].includes(t)) ||
-      /pass(word|wd|code)|pwd|otp|cvc|cvv|card.?num/i.test(nameAndId)) {
+      /pass(word|wd|code)|pwd|otp|cvc|cvv|card.?num|api.?key|secret|token|(?:^|[^a-z])ssn(?:[^a-z]|$)|social.?sec/i.test(nameAndId)) {
     return { ok: false, code: "REFUSED", message: "refusing to type into a password, one-time-code or credit-card field" };
   }
   const isField = tag === "input" || tag === "textarea";
@@ -331,7 +331,7 @@ function zbPage(a, expectedOrigin) {
     const ac = String(el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/);
     return (tagOf(el) === "input" && String(el.type).toLowerCase() === "password") ||
       ac.some((t) => t.startsWith("cc-") || ["current-password", "new-password", "one-time-code"].includes(t)) ||
-      /pass(word|wd|code)|pwd|otp|cvc|cvv|card.?num/i.test(`${el.getAttribute("name") || ""} ${el.getAttribute("id") || ""}`);
+      /pass(word|wd|code)|pwd|otp|cvc|cvv|card.?num|api.?key|secret|token|(?:^|[^a-z])ssn(?:[^a-z]|$)|social.?sec/i.test(`${el.getAttribute("name") || ""} ${el.getAttribute("id") || ""}`);
   };
   const mouse = (el, type, x, y, extra = {}) => el.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, {
     bubbles: !/enter|leave/.test(type), cancelable: true, composed: true, clientX: x, clientY: y, view: window,

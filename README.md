@@ -50,7 +50,8 @@ Claude only sees tabs it opened itself and tabs you hand to it. Everything else
 in your browser is invisible to it.
 
 What it deliberately can't do: run arbitrary JavaScript, read cookies or
-storage, read or fill password, one-time-code and card fields, upload files
+storage, read or fill password, one-time-code, card, API key, secret, token or SSN
+fields, upload files
 from anywhere but the project folder, `~/Downloads` and `~/Desktop`, or
 inject CSS that loads anything (`url()`, `@import`, ...), since that could leak
 page data.

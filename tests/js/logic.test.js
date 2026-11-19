@@ -103,6 +103,17 @@ test("sensitive fields", () => {
   for (const n of ["password ", " user_pwd", "otp-code ", "cvv ", "card-number "])
     assert.ok(L.zbIsSensitiveField("input", "text", "", n), n);  // toggled-visible password etc.
   assert.ok(!L.zbIsSensitiveField("input", "text", "", "search q"));
+  // ZB-6: API keys, secrets, tokens and SSNs (ssn only as its own word: not "classname")
+  for (const n of ["api_key ", "apikey ", " stripe-api-key", "client_secret ", "access_token ", "ssn ", " user-ssn", "social_security "])
+    assert.ok(L.zbIsSensitiveField("input", "text", "", n), n);
+  for (const n of ["classname ", "lessons ", "session_name "]) assert.ok(!L.zbIsSensitiveField("input", "text", "", n), n);
+});
+
+test("the injected copies of the sensitive-name rule match logic.js", () => {
+  const rule = String(L.zbIsSensitiveField).match(/ZB_SENSITIVE_NAME/) && fs.readFileSync(path.join(EXT, "logic.js"), "utf8")
+    .match(/const ZB_SENSITIVE_NAME = \/(.+)\/i;/)[1];
+  const actions = fs.readFileSync(path.join(EXT, "actions.js"), "utf8");
+  assert.strictEqual(actions.split(`/${rule}/i.test(`).length - 1, 2);
 });
 
 test("tab_open allowance", () => {
