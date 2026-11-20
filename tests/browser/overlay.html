@@ -1,0 +1,63 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>running</title>
+<!-- R-017 in a real browser: can a page hide or cover the activity overlay? See README "Tests". -->
+<style>body{font:20px monospace;margin:0;padding:10px;background:#fff;min-height:300vh;min-width:300vw} #out{white-space:pre}</style></head>
+<body><div id="out"></div>
+<script src="../../extension/actions.js"></script>
+<script>
+(async () => {
+  const O = location.origin, out = [], tick = async () => { for (let i = 0; i < 100; i++) await null; };
+  const check = (name, cond) => out.push((cond ? "PASS " : "FAIL ") + name);
+  const show = () => zbShow({ kind: "glow" }, O);
+  const host = () => document.getElementById("zenbridge-overlay");
+  try {
+    check("popover+checkVisibility supported", typeof HTMLElement.prototype.showPopover === "function" && typeof Element.prototype.checkVisibility === "function");
+    check("initial visible", show().visible === true);
+    check("in top layer", host().matches(":popover-open"));
+    host().remove(); await tick();
+    check("put back after remove", !!host() && host().matches(":popover-open"));
+    check("visible after remove", show().visible === true);
+    const st = document.createElement("style");
+    st.textContent = "#zenbridge-overlay{display:none!important;opacity:0!important;visibility:hidden!important;transform:scale(0)!important} @layer a{#zenbridge-overlay{display:none!important;opacity:0!important}} :popover-open{display:none!important}";
+    document.head.appendChild(st);
+    check("page stylesheet !important / layers can't hide", show().visible === true);
+    st.remove();
+    const cover = document.createElement("div");
+    cover.popover = "manual";
+    cover.style.cssText = "inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;background:red;border:0";
+    document.body.appendChild(cover); cover.showPopover();
+    check("page popover opened after: next action re-shows ours on top", show().visible === true);
+    const dlg = document.createElement("dialog");
+    dlg.style.cssText = "inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;background:red";
+    document.body.appendChild(dlg); dlg.showModal();
+    check("modal dialog opened after: next action re-shows ours on top", show().visible === true);
+    const ov = globalThis.__zbOverlay; ov.glow.style.setProperty("pointer-events", "auto");
+    const hit = document.elementFromPoint(100, 100);
+    ov.glow.style.setProperty("pointer-events", "none");
+    out.push("INFO under a modal, elementFromPoint gives: " + (hit ? hit.tagName : null));
+    dlg.close(); cover.hidePopover();
+    // a cover we can't get above: re-open the page popover right after ours, then check directly
+    zbShow({ kind: "glow" }, O); cover.showPopover();
+    const o = globalThis.__zbOverlay; o.glow.style.setProperty("pointer-events", "auto");
+    check("hit test sees a cover above", document.elementFromPoint(100, 100) !== o.host);
+    o.glow.style.setProperty("pointer-events", "none"); cover.hidePopover();
+    host().style.display = "none"; host().setAttribute("hidden", ""); await tick();
+    check("inline restyle undone", getComputedStyle(host()).display === "block" && !host().hasAttribute("hidden"));
+    document.documentElement.style.opacity = "0";
+    check("faded root -> not visible", show().visible === false);
+    document.documentElement.style.opacity = "";
+    check("visible again", show().visible === true);
+    check("hide for screenshot", zbShow({ hide: true }, O).visible === false && !host().matches(":popover-open"));
+    check("shows again after screenshot", show().visible === true);
+    const fighter = new MutationObserver(() => { if (host() && host().style.display !== "none") host().style.display = "none"; });
+    fighter.observe(host(), { attributes: true });
+    host().style.display = "none";
+    for (let i = 0; i < 10; i++) await tick();
+    fighter.disconnect();
+    check("fighting page marked tampered", show().visible === false);
+  } catch (e) { out.push("FAIL exception " + e); }
+  document.getElementById("out").textContent = out.join("\n");
+  document.title = out.every((l) => l.startsWith("PASS")) ? "ALLPASS" : "FAILED";
+  window.__done = true;
+})();
+</script></body></html>

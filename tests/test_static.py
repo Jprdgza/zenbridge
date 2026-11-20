@@ -112,18 +112,20 @@ class ManifestGuards(unittest.TestCase):
     def test_pages_use_only_what_they_need(self):
         pages = os.path.join(EXT, "pages")
         self.assertEqual(sorted(os.listdir(pages)),
-                         ["options.html", "options.js", "start.html", "start.js", "theme.css", "ui.js"])
+                         ["confirm.html", "confirm.js", "notice.html", "options.html", "options.js", "start.html", "start.js",
+                          "theme.css", "ui.js"])
         allowed = {
             "start.js": {"browser.permissions.request"},
             "ui.js": {"browser.runtime.getBackgroundPage", "browser.runtime.openOptionsPage"},
             "options.js": {"browser.storage.local.get", "browser.storage.local.set", "browser.storage.local.remove"},
+            "confirm.js": {"browser.runtime.getBackgroundPage"},  # reads the question, answers it; nothing else
         }
         for name, apis in allowed.items():
             src = code_only(read(f"extension/pages/{name}"))
             self.assertEqual(set(re.findall(r"\bbrowser\.[\w.]+", src)), apis, name)
             for pat in NetworkGuards.FORBIDDEN_JS:
                 self.assertIsNone(re.search(pat, src), f"{name}: {pat}")
-        for name in ("start.html", "options.html"):
+        for name in ("start.html", "options.html", "confirm.html", "notice.html"):
             html = read(f"extension/pages/{name}")
             self.assertNotRegex(html, r"<script>|<script [^>]*>[^<]|\son\w+=|(src|href)=\"https?://", name)  # no inline JS, no remote URLs
             self.assertIn("not made by or affiliated with Anthropic", html)

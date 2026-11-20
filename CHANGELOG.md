@@ -2,6 +2,37 @@
 
 Each version here is a tagged release on GitHub with a signed `.xpi`.
 
+## [1.5.2] - 2026-11-19
+
+Fixes from a second outside security review.
+
+- **Every `file_upload` asks you first**, in a small zenbridge window that shows
+  the files, their sizes and the site receiving them. Only your click on Allow
+  sends them; Don't allow, closing the window, Alt+Shift+K or 60 seconds without
+  an answer refuses the upload. Web pages and the MCP server can't answer it.
+- Files that look like keys or credentials (`*.pem`, `*.key`, `*.p12`, `*.pfx`,
+  `*.jks`, `*.kdbx`, `*.ovpn`, `*.tfstate`, `id_rsa`, `id_ed25519`,
+  `*credential*`, `*secret*`, `service-account*.json`, ...) are always refused.
+- The folder Claude Code runs in is no longer an upload folder by default; add
+  it with `ZENBRIDGE_UPLOAD_DIRS` if you want it. The action log records which
+  site received each upload.
+- **Claude asks before moving between public websites and local addresses**
+  (localhost etc.): opening or navigating to a local address after reading a
+  public page, the other way round, or opening localhost when you never handed
+  Claude a local tab yourself. Each site you allow is asked once until Claude is
+  turned off.
+- The "Claude is working" overlay can't be hidden or covered by the page. It
+  sits in the browser's top layer and is put back if the page removes or
+  restyles it. If it still isn't showing, Claude won't act on that page.
+- Updating from 1.5.0 or 1.5.1 turns "Stay on across restarts" off once if it was
+  saved as on (older versions saved every setting whenever you changed one), and
+  a page explains why. The settings page now saves only what you changed.
+- `install.sh` without `--global` removes an every-project registration and the
+  Claude desktop chat entry left by an older install, and says so;
+  `uninstall.sh` removes both, plus the registration for the folder you run it in.
+- README: the security notes say plainly that any program running as you can
+  use zenbridge while Claude is on.
+
 ## [1.5.1] - 2026-11-18
 
 Security fixes from an outside review.

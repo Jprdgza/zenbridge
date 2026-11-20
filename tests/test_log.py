@@ -87,6 +87,31 @@ class LogTest(unittest.TestCase):
         self.assertEqual(a["openedTabId"], 42)
         self.assertLess(len(json.dumps(b)), 6000)
 
+    def test_upload_logs_the_receiving_origin(self):
+        """ZB-7: every upload records where the files went (and how many, how big), never their content."""
+        log = zh.ActionLog(self.path)
+        self.addCleanup(os.close, log.fd)
+        host = zh.Host(lambda n: b"", lambda b: None, log)
+        host.call_extension = lambda req: {"v": 1, "id": req["id"], "ok": True, "tabUrl": "https://jobs.example/apply?token=abcdefghijklmnopqrstuvwxyz123456",
+                                           "result": {"files": 1, "bytes": 2048, "target": "input", "origin": "https://jobs.example"}}
+        host.handle_request({"v": 1, "id": rid(), "tool": "file_upload", "args": {"tabId": 4, "ref": "ref_1", "uploads": ["a" * 32]}})
+        host.call_extension = lambda req: {"v": 1, "id": req["id"], "ok": False, "tabUrl": "https://evil.example/form",
+                                           "error": {"code": "REFUSED", "message": "the user did not allow this upload"}}
+        host.handle_request({"v": 1, "id": rid(2), "tool": "file_upload", "args": {"tabId": 4, "ref": "ref_1", "uploads": ["b" * 32]}})
+        ok, refused = self.lines()
+        self.assertEqual((ok["origin"], ok["files"], ok["bytes"]), ("https://jobs.example", 1, 2048))
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz123456", json.dumps(ok))
+        self.assertEqual(refused["outcome"], "refused")
+        self.assertTrue(refused["url"].startswith("https://evil.example/"))
+
+    def test_confirm_tools_wait_longer_than_the_question(self):
+        """The host must still be waiting when you answer zenbridge's 60 s question."""
+        limits = zh.zbcore.LIMITS
+        for tool in ("file_upload", "tab_open", "navigate"):
+            self.assertGreater(zh.zbcore.timeout_for(tool), limits["confirmTimeoutSeconds"], tool)
+        self.assertEqual(zh.zbcore.timeout_for("click"), limits["timeoutSeconds"])
+        self.assertEqual(zh.zbcore.timeout_for("screenshot"), limits["screenshotTimeoutSeconds"])
+
     def test_typed_text_and_css_are_not_logged(self):
         log = zh.ActionLog(self.path)
         self.addCleanup(lambda: os.close(log.fd))

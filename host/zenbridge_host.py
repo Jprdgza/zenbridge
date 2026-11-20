@@ -177,7 +177,7 @@ class Host:
             slot[0].set()
 
     def call_extension(self, req):
-        timeout = zbcore.LIMITS["screenshotTimeoutSeconds" if req["tool"] == "screenshot" else "timeoutSeconds"]
+        timeout = zbcore.timeout_for(req["tool"])
         slot = [threading.Event(), None]
         with self.pending_lock:
             if req["id"] in self.pending:
@@ -215,6 +215,8 @@ class Host:
                 extra["openedTabId"] = res["tabId"]
             if req["tool"] == "reload":
                 extra["reloadedTabIds"] = res["reloaded"]
+            if req["tool"] == "file_upload":  # where the files went, and how much (never the content)
+                extra.update(origin=res["origin"], files=res["files"], bytes=res["bytes"])
             self.log.write(req["tool"], req["args"], "ok", tab_url, **extra)
         else:
             e = resp["error"]

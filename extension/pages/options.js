@@ -24,12 +24,14 @@ function read() {
   return raw;
 }
 
+// Only settings that differ from the defaults are saved, so a safer default reaches you later (ZB-9).
 async function save() {
   const raw = read();
-  const s = clean(raw);
+  const full = clean(raw);
+  const s = zbSettingsDiff(full, ZB_DEFAULTS, ZB_TUNABLE);
   await browser.storage.local.set({ settings: s });
-  render(s);
-  const dropped = JSON.stringify(raw.allowlist) !== JSON.stringify(s.allowlist) || raw.cursorDelayMs !== s.cursorDelayMs;
+  render(full);
+  const dropped = JSON.stringify(raw.allowlist) !== JSON.stringify(full.allowlist) || raw.cursorDelayMs !== full.cursorDelayMs;
   saved.textContent = dropped ? "Saved. Some values were invalid and were reset." : "Saved.";
 }
 

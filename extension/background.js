@@ -20,12 +20,35 @@ const TITLES = {
 const ignore = () => {};
 let session = false;  // a session lets Claude open its own tabs without any armed page
 let hostStatus = "connecting";  // "connected" | "missing" (companion app not installed) | "disconnected"
+// ZB-8: the kinds of site Claude has seen since Claude was last fully off ("local" = allowlist or loopback,
+// "public" = the rest), whether you armed a local tab by hand, and the origins you allowed it to cross into.
+const crossing = { touched: new Set(), handArmedLocal: false, approved: new Set() };
+const isLocal = (origin) => zbIsLocal(origin, ZB_CONFIG.allowlist);
+const zoneOf = (origin) => (isLocal(origin) ? "local" : "public");
 
 // Settings from the settings page; sanitized, since storage is just data.
 function applySettings(raw) { Object.assign(ZB_CONFIG, zbSanitizeSettings(raw, ZB_DEFAULTS, ZB_TUNABLE)); }
 const settingsReady = browser.storage.local.get("settings").then((r) => applySettings(r.settings), () => applySettings(undefined));
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.settings) applySettings(changes.settings.newValue);
+});
+
+// ZB-9: 1.5.0 and 1.5.1 saved every setting whenever you changed one, so a saved alwaysOn: true outlived its
+// default turning off. Updating from those turns it off once, keeps only settings that differ from the
+// defaults, ends any session that resumed because of it, and opens a page saying why.
+let noResume = false;
+browser.runtime.onInstalled.addListener(async ({ reason, previousVersion }) => {
+  if (reason !== "update" || !zbVersionLess(previousVersion, "1.5.2")) return;
+  noResume = true;
+  if (session) endAll();
+  try {
+    const stored = (await browser.storage.local.get("settings")).settings;
+    const wasOn = !!(stored && typeof stored === "object" && stored.alwaysOn === true);
+    const s = zbSettingsDiff({ ...zbSanitizeSettings(stored, ZB_DEFAULTS, ZB_TUNABLE), alwaysOn: false }, ZB_DEFAULTS, ZB_TUNABLE);
+    await browser.storage.local.set({ settings: s });
+    applySettings(s);
+    if (wasOn) await browser.tabs.create({ url: browser.runtime.getURL("pages/notice.html") });
+  } catch (e) { applySettings({ ...ZB_CONFIG, alwaysOn: false }); }
 });
 
 // Read by the start and settings pages through runtime.getBackgroundPage().
@@ -56,6 +79,9 @@ function setBadge(tabId, url) {
 // With nothing armed and no session, drop every optional host grant (incl. <all_urls>).
 function releaseIfIdle() {
   if (armed.size > 0 || session) return;
+  crossing.touched.clear();
+  crossing.approved.clear();
+  crossing.handArmedLocal = false;
   browser.permissions.getAll().then((p) => {
     if (armed.size === 0 && !session && p.origins.length) return browser.permissions.remove({ origins: p.origins });
   }).catch(ignore);
@@ -110,6 +136,7 @@ browser.permissions.onRemoved.addListener((p) => {
 });
 
 function endAll() {
+  for (const id of [...confirms.keys()]) finishConfirm(id, false);
   for (const tabId of [...armed.keys()]) disarm(tabId);
   setSession(false);
 }
@@ -174,6 +201,7 @@ browser.browserAction.onClicked.addListener((tab, info) => {
   // <all_urls> is needed by tabs.captureTab.
   browser.permissions.request({ origins: [...new Set([zbHostPattern(origin), ...extra, "<all_urls>"])] }).then((granted) => {
     if (!granted) return;
+    if (isLocal(origin)) crossing.handArmedLocal = true;
     if (decision === "arm") { armed.set(tab.id, zbNewScope(origin, ZB_CONFIG)); setGrouped(tab.id, true); }
     else if (armed.has(tab.id)) armed.get(tab.id).add(origin);
     setBadge(tab.id, tab.url);
@@ -227,9 +255,57 @@ settingsReady.then(async () => {
     } catch (e) { granted = false; }
   }
   const age = Date.now() - started;
-  if (granted && started > 0 && age >= 0 && age < ZB_SESSION_MAX_HOURS * 3600000) setSession(true, started);
+  if (!noResume && ZB_CONFIG.alwaysOn && granted && started > 0 && age >= 0 && age < ZB_SESSION_MAX_HOURS * 3600000) setSession(true, started);
   else setSession(false);
 });
+
+// ------------------------------------------------------ asking you (ZB-7, ZB-8)
+// Uploads, and moves between public sites and local addresses, wait for your click in a zenbridge window
+// (pages/confirm.html). A web page can't script, frame or cover an extension window, and nothing the MCP
+// server or the host sends can answer it: only that page's trusted click calls zbConfirmAnswer. Closing the
+// window, Alt+Shift+K or no answer within confirmTimeoutSeconds (60 s) counts as no.
+const CONFIRM_URL = browser.runtime.getURL("pages/confirm.html");
+const confirms = new Map();  // id -> { details, resolve, windowId, timer }
+function finishConfirm(id, allow) {
+  const c = confirms.get(id);
+  if (!c) return;
+  confirms.delete(id);
+  clearTimeout(c.timer);
+  if (c.windowId !== undefined) browser.windows.remove(c.windowId).catch(ignore);
+  c.resolve(allow === true);
+}
+// Used only by pages/confirm.js, through runtime.getBackgroundPage().
+function zbConfirmDetails(id) { const c = confirms.get(id); return c ? JSON.stringify(c.details) : null; }
+function zbConfirmAnswer(id, allow) { finishConfirm(id, allow === true); }
+browser.windows.onRemoved.addListener((windowId) => {
+  for (const [id, c] of confirms) if (c.windowId === windowId) finishConfirm(id, false);
+});
+async function askUser(details) {
+  const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+  const answer = new Promise((resolve) => {
+    confirms.set(id, { details, resolve, windowId: undefined,
+      timer: setTimeout(() => finishConfirm(id, false), ZB_SCHEMA.limits.confirmTimeoutSeconds * 1000) });
+  });
+  try {
+    const w = await browser.windows.create({ type: "popup", url: `${CONFIRM_URL}#${id}`, width: 480, height: 380 });
+    const c = confirms.get(id);
+    if (c) c.windowId = w.id; else browser.windows.remove(w.id).catch(ignore);
+  } catch (e) { finishConfirm(id, false); }
+  return answer;
+}
+
+// ZB-8: before Claude reaches `origin`, ask you if that crosses between public sites and local addresses.
+async function checkCrossing(origin, tabUrl) {
+  const local = isLocal(origin);
+  if (!zbCrossingNeedsOk(origin, local, crossing)) return;
+  const ok = await askUser({ kind: "cross", origin, local, seenPublic: crossing.touched.has("public"),
+    seenLocal: crossing.touched.has("local") });
+  if (!ok) {
+    throw new ZbError("REFUSED", `the user did not allow Claude to move to ${origin}: zenbridge asks before Claude goes `
+      + "between public sites and local addresses (no answer within 60 s counts as no)", tabUrl);
+  }
+  crossing.approved.add(origin);
+}
 
 // ------------------------------------------------------------- choke point
 async function resolveArmedTab(tabId) {
@@ -269,12 +345,18 @@ function hookConsole(tabId) {
   resolveArmedTab(tabId).then((ctx) => inject(ctx, zbPage, { op: "consoleHook" }, 3000)).catch(ignore);
 }
 
-// Visual cue in the page before an action; never blocks or fails the action itself.
+// Visual cue in the page before an action. With activity cues on, you must be able to see that Claude is
+// acting: if the page hides or covers the overlay (or the cue can't run), the action is refused.
 async function cue(ctx, arg, pause) {
   if (!ZB_CONFIG.showActivity) return;
-  try { await inject(ctx, zbShow, arg, 1500); } catch (e) { return; }
+  const r = await inject(ctx, zbShow, arg, 1500);
+  if (!arg.hide && r.visible !== true) {
+    const why = String(r.why || "").replace(/[^a-z0-9 ,]/gi, "").slice(0, 80);
+    throw new ZbError("REFUSED", `this page hides or covers zenbridge's activity overlay${why ? ` (${why})` : ""}, so Claude won't act on it`, ctx.url);
+  }
   if (pause && ZB_CONFIG.cursorDelayMs > 0) await new Promise((r) => setTimeout(r, ZB_CONFIG.cursorDelayMs));
 }
+const quietCue = (ctx, arg) => cue(ctx, arg).catch(ignore);  // after an action, or hiding it for a screenshot
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const int = (v) => Math.max(0, Math.round(num(v)));
@@ -323,7 +405,16 @@ const TOOLS = {
       throw new ZbError("OUT_OF_SCOPE", ZB_CONFIG.goAnywhere ? "this site cannot be opened (add-on store)"
         : "tab_open is limited to origins already in an armed tab's scope, plus local addresses while Claude is on");
     }
+    await checkCrossing(origin);
     const tab = await browser.tabs.create({ url: a.url, active: true });
+    crossing.touched.add(zoneOf(origin));
+    // tabs.create resolves while the tab is still about:blank; wait (up to 5 s) for the page, so the next
+    // action doesn't hit a blank or half-loaded tab.
+    for (let i = 0; i < 50; i++) {
+      const t = await browser.tabs.get(tab.id).catch(() => null);
+      if (!t || (t.status !== "loading" && t.url && t.url !== "about:blank")) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     let isArmed = false;
     // origin is already user-approved (zbOpenAllowed); still require the host grant from their click.
     if (ZB_CONFIG.autoArmOpened && await browser.permissions.contains({ origins: [zbHostPattern(origin)] })) {
@@ -351,6 +442,7 @@ const TOOLS = {
       return { tabId: ctx.tab.id, url };
     }
     if (!zbInScope(ctx.scope, zbOriginOf(a.url))) throw new ZbError("OUT_OF_SCOPE", "target origin is not in this tab's scope", ctx.url);
+    await checkCrossing(zbOriginOf(a.url), ctx.url);
     await browser.tabs.update(ctx.tab.id, { url: a.url });
     await settled(ctx.tab.id, before);
     return { tabId: ctx.tab.id, url: a.url };
@@ -381,12 +473,12 @@ const TOOLS = {
       : g  // rect is in page coordinates; scale 2 zooms the region in
         ? { format: "png", scale: 2, rect: { x: num(m.scrollX) + g.x, y: num(m.scrollY) + g.y, width: Math.min(g.width, vw - g.x), height: Math.min(g.height, vh - g.y) } }
         : { format: "png", scale: 1 };  // scale is device px per CSS px: 1 => image px == CSS px
-    await cue(ctx, { hide: true });  // keep the overlay out of the image
+    await quietCue(ctx, { hide: true });  // keep the overlay out of the image
     let dataUrl;
     try {
       dataUrl = await withTimeout(browser.tabs.captureTab(ctx.tab.id, opts), 15000,
         "the tab did not render in time (is the window minimized or the tab in another workspace?); try tab_switch, then screenshot again", ctx);
-    } finally { await cue(ctx, { kind: "glow" }); }
+    } finally { await quietCue(ctx, { kind: "glow" }); }
     await resolveArmedTab(ctx.tab.id);  // tab may have navigated out of scope during capture
     const mime = a.fullPage ? "image/jpeg" : "image/png";
     const prefix = `data:${mime};base64,`;
@@ -456,7 +548,7 @@ const TOOLS = {
   },
   async drag(a, ctx) {
     const r = await inject(ctx, zbPage, { op: "drag", from: a.from, to: a.to });
-    await cue(ctx, { kind: "hover", ...a.to });
+    await quietCue(ctx, { kind: "hover", ...a.to });
     return { tag: str(r.tag, 40), text: str(r.text, 200), html5: !!r.html5 };
   },
   async key(a, ctx) {
@@ -529,9 +621,19 @@ const TOOLS = {
       files.push({ name: u.name, mimeType: u.mimeType, data: u.parts.join("") });
     }
     for (const id of a.uploads) uploads.delete(id);
+    // ZB-7: Claude picked these files, maybe on a page's say-so. You decide whether this site gets them.
+    const sizes = files.map((f) => ({ name: f.name, bytes: Math.floor(f.data.length * 3 / 4) - (f.data.match(/=*$/)[0].length) }));
+    const ok = await askUser({ kind: "upload", origin: ctx.origin, files: sizes });
+    if (!ok) {
+      throw new ZbError("REFUSED", "the user did not allow this upload: zenbridge asks before every upload "
+        + "(no answer within 60 s counts as no)", ctx.url);
+    }
+    const now = await resolveArmedTab(ctx.tab.id);  // the tab may have moved on while you decided
+    if (now.origin !== ctx.origin) throw new ZbError("REFUSED", "the page changed while waiting for the user; nothing was uploaded", now.url);
     const { tabId, uploads: _ids, ...target } = a;
-    const r = await inject(ctx, zbPage, { op: "upload", ...target, files }, 12000);
-    return { files: Math.min(int(r.files), 10), bytes: Math.min(int(r.bytes), 100000000), target: r.target === "drop" ? "drop" : "input" };
+    const r = await inject(now, zbPage, { op: "upload", ...target, files }, 12000);
+    return { files: Math.min(int(r.files), 10), bytes: Math.min(int(r.bytes), 100000000), target: r.target === "drop" ? "drop" : "input",
+      origin: str(ctx.origin, 2048) };
   },
 };
 
@@ -539,7 +641,10 @@ const TOOLS = {
 const CUES = { click: "click", hover: "hover", drag: "hover", type: "type", key: "type", form_input: "type", file_upload: "type",
   scroll: "scroll", read_page: "glow", read_tree: "glow", find: "glow", inject_css: "glow", wait_for: "glow" };
 
-// validate -> resolve tab -> check armed -> check scope -> perform -> validate result -> return
+// Tools that neither read nor act on the page they are given (navigate checks its target instead).
+const NO_CROSSING = ["tab_switch", "tab_close", "navigate"];
+
+// validate -> resolve tab -> check armed -> check scope -> public/local crossing -> cue -> perform -> validate result -> return
 async function handleRequest(msg) {
   await settingsReady;
   const id = msg && typeof msg.id === "string" && /^[0-9a-f]{16,64}$/.test(msg.id) ? msg.id : NO_ID;
@@ -554,6 +659,10 @@ async function handleRequest(msg) {
   let ctx = null;
   try {
     if (Object.hasOwn(msg.args, "tabId")) ctx = await resolveArmedTab(msg.args.tabId);
+    if (ctx && !NO_CROSSING.includes(msg.tool)) {  // ZB-8: reading or acting on a page in the other kind of site
+      await checkCrossing(ctx.origin, ctx.url);
+      crossing.touched.add(zoneOf(ctx.origin));
+    }
     const kind = ctx && CUES[msg.tool];
     if (kind) {
       const a = msg.tool === "drag" ? msg.args.from : msg.args;

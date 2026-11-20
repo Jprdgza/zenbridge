@@ -51,15 +51,15 @@ in your browser is invisible to it.
 
 What it deliberately can't do: run arbitrary JavaScript, read cookies or
 storage, read or fill password, one-time-code, card, API key, secret, token or SSN
-fields, upload files
-from anywhere but the project folder, `~/Downloads` and `~/Desktop`, or
-inject CSS that loads anything (`url()`, `@import`, ...), since that could leak
-page data.
+fields, upload a file without your OK, upload files from anywhere but
+`~/Downloads`, `~/Desktop` and folders you list, or inject CSS that loads
+anything (`url()`, `@import`, ...), since that could leak page data.
 
 While Claude works in a tab you'll see a soft purple glow, a "Claude is working
 in this tab" label, and a cursor that moves to whatever it clicks, types into
 or scrolls (colors from [Catppuccin](https://catppuccin.com)). Its tabs are
-kept in a **Claude** tab group.
+kept in a **Claude** tab group. A page can't hide that overlay: Claude won't act
+on a page that hides or covers it.
 
 ## Install
 
@@ -107,6 +107,10 @@ Requirements:
    `--scope local` is private to you and that project. (`--scope project` writes
    `.mcp.json` into the repo, so everyone who clones it gets the entry.)
 
+   Without `--global`, `install.sh` also removes a registration for every
+   project and the Claude desktop chat entry if an older version (or `--global`)
+   added them, and prints what it removed.
+
    `./install.sh --global` instead registers it for every Claude Code project and
    for Claude desktop chats (quit and reopen the app afterwards). That's handier,
    but riskier: while Claude is on, any Claude session can then drive your
@@ -129,6 +133,10 @@ Requirements:
   restarts.
 - **Turn everything off:** **Alt+Shift+K**. This releases every tab and revokes
   the permission, so Claude stays off until you turn it on again.
+- **zenbridge asks you** in a small window of its own before every file upload
+  (it shows the files and the site receiving them), and before Claude moves
+  between public websites and local addresses like localhost. Web pages can't
+  see or click that window. No answer within 60 seconds counts as no.
 
 ### Settings
 
@@ -184,9 +192,15 @@ tail -f ~/Library/Logs/zenbridge/actions.jsonl
 - Page text, titles and screenshots are wrapped in "untrusted content" markers,
   but prompt injection from web pages is still a real risk. Don't hand Claude
   tabs it doesn't need, especially logged-in ones.
-- When Claude is on, any program running as your user that can reach the socket
-  can drive Claude's tabs. zenbridge doesn't protect you from malware running
-  as you.
+- Uploads and moves between public websites and local addresses wait for your
+  click in a zenbridge window, which neither web pages nor the MCP server can
+  answer. The "Claude is working" overlay lives in the browser's top layer and
+  is checked before every action; a page that hides or covers it gets no actions.
+- **Any program running as you can use zenbridge while Claude is on.** The
+  socket only checks that the caller is your user, so while Claude is on (or a
+  tab is handed over), any process running as you can connect and drive
+  Claude's tabs, just like Claude. zenbridge doesn't protect you from malware
+  running as you. Turn Claude off with Alt+Shift+K when you aren't using it.
 
 ## Limitations
 
@@ -203,11 +217,15 @@ tail -f ~/Library/Logs/zenbridge/actions.jsonl
   use `file_upload` and `form_input` instead.
 - Console capture starts the first time Claude asks for it, so messages logged
   while a page first loads can be missed.
-- Uploads are limited to 10 files and 10 MB, from the folder Claude Code runs in,
-  `~/Downloads` or `~/Desktop`. Add folders with `ZENBRIDGE_UPLOAD_DIRS`
-  (`:`-separated), e.g. `claude mcp add -e ZENBRIDGE_UPLOAD_DIRS=/path/one:/path/two ...`.
-  Hidden files, `~/Library`, `/private`, `/System`, `/Library`, `/var`, and browser
-  password, cookie and keychain files are always refused.
+- Uploads are limited to 10 files and 10 MB, from `~/Downloads` or `~/Desktop`,
+  and each one needs your click on Allow. The folder Claude Code runs in is not
+  included unless you add it. Add folders with `ZENBRIDGE_UPLOAD_DIRS`
+  (`:`-separated), e.g. `claude mcp add -e ZENBRIDGE_UPLOAD_DIRS=/path/to/project ...`.
+  Hidden files, `~/Library`, `/private`, `/System`, `/Library`, `/var`, browser
+  password, cookie and keychain files, and names that look like keys or
+  credentials (`*.pem`, `*.key`, `*.p12`, `*.kdbx`, `*.tfstate`, `id_rsa`,
+  `id_ed25519`, `*credential*`, `*secret*`, `service-account*.json`, ...) are
+  always refused.
 - Several Claude Code sessions can share the browser, but they take turns.
 
 ## Development
@@ -219,6 +237,11 @@ python3 -m unittest discover -s tests
 ```bash
 cd tests/js && node --test
 ```
+
+The overlay check also runs in a real browser: serve the repo with
+`python3 -m http.server 8793 --bind 127.0.0.1`, open
+`http://127.0.0.1:8793/tests/browser/overlay.html` in Firefox or Zen, and every
+line should say PASS.
 
 `schema/tools.json` is the single source of truth. After editing it, run
 `python3 gen_schema.py` to regenerate `extension/schema.js` (a test checks they

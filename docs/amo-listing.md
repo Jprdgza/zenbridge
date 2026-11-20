@@ -17,8 +17,10 @@ You stay in control:
 - Claude only sees tabs it opened and tabs you hand it with the toolbar button. Your other tabs are invisible to it.
 - Turning Claude on takes a click. It turns itself off after 8 hours, and Alt+Shift+K turns it off at any time and revokes its access.
 - Going to any website is opt-in from the settings page. By default Claude stays on the sites you hand it plus localhost.
-- It never reads or fills password, one-time-code or card fields, never runs arbitrary JavaScript, never reads cookies or storage, and refuses to upload hidden files or anything from folders like ~/.ssh.
-- While Claude works, the tab shows a glow, a "Claude is working in this tab" label and a moving cursor, so you can see what it's doing.
+- It never reads or fills password, one-time-code or card fields, never runs arbitrary JavaScript and never reads cookies or storage.
+- Every file upload waits for you to click Allow in a zenbridge window that shows the files and the site receiving them. Keys, credentials and hidden files are always refused.
+- Claude asks before it moves between public websites and local addresses like localhost.
+- While Claude works, the tab shows a glow, a "Claude is working in this tab" label and a moving cursor, so you can see what it's doing. Pages can't hide it: Claude won't act on a page that does.
 
 Setup: this add-on needs the zenbridge companion app (Python 3.10+, macOS or Linux) and Claude Code. Install instructions: https://github.com/Jprdgza/zenbridge#install. Without it, the toolbar button shows a "!" and the settings page explains what's missing.
 
@@ -40,5 +42,5 @@ zenbridge is an unofficial, open-source (MIT) community project. It is not made 
 - `storage` holds one settings object, re-validated on every read, and the time Claude was turned on (sessions end by themselves after 8 hours).
 - `webRequest` (observe only, no blocking) records method, URL, type and status of requests in tabs Claude can see, for the `network_requests` tool. Nothing is recorded for other tabs, secret-looking URL parameters are redacted, and the log is in memory only.
 - The `console_messages` tool wraps the page's `console` methods with `exportFunction` from an injected function (no content scripts); the wrappers only copy messages into the extension's isolated world and call the original method.
-- Files for `file_upload` are read by the companion app (never by the extension) and sent in pieces because native messages to the extension are capped at 1 MB. The app refuses hidden files and folders and system folders like `~/Library/Keychains`.
+- Files for `file_upload` are read by the companion app (never by the extension) and sent in pieces because native messages to the extension are capped at 1 MB. The app refuses hidden files, system folders like `~/Library/Keychains` and key/credential file names, and the extension then asks the user in its own popup window (`pages/confirm.html`, opened with `windows.create`) before the files are put into the page. The same window asks before Claude moves between public sites and local addresses.
 - `extension/manifest.README.md` justifies each permission.

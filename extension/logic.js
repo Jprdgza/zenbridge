@@ -132,6 +132,39 @@ function zbOpenAllowed(origin, openable, scopes) {
   return false;
 }
 
+// Local addresses: the allowlist, plus names that always mean this computer.
+function zbIsLocal(origin, allowlist) {
+  if (!origin) return false;
+  if (zbInScope(allowlist, origin)) return true;
+  const h = new URL(origin).hostname;
+  return h === "localhost" || h.endsWith(".localhost") || /^127\.\d+\.\d+\.\d+$/.test(h) || h === "[::1]" || h === "0.0.0.0";
+}
+
+// Moving Claude between public sites and local addresses is your decision, not the model's (ZB-8).
+// state: touched = the kinds of site ("local"/"public") Claude has seen this session; handArmedLocal = you armed
+// a local tab by hand; approved = origins you already allowed. A local origin needs your OK once Claude has
+// seen a public site, or if you never armed a local tab yourself; a public one, once Claude has seen a local one.
+function zbCrossingNeedsOk(origin, isLocal, state) {
+  if (state.approved.has(origin)) return false;
+  return isLocal ? state.touched.has("public") || !state.handArmedLocal : state.touched.has("local");
+}
+
+// The settings page saves only what differs from the defaults, so a safer default (like alwaysOn turning off
+// in 1.5.1) still reaches people who saved some other setting (ZB-9).
+function zbSettingsDiff(s, defaults, tunable) {
+  const out = {};
+  for (const k of tunable) if (Object.hasOwn(s, k) && JSON.stringify(s[k]) !== JSON.stringify(defaults[k])) out[k] = s[k];
+  return out;
+}
+
+// "1.5.1" < "1.5.2". Missing or non-numeric parts count as 0.
+function zbVersionLess(a, b) {
+  const parts = (v) => String(v || "").split(".").map((x) => parseInt(x, 10) || 0);
+  const x = parts(a), y = parts(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+  return false;
+}
+
 // network_requests shows URLs a page loaded, and the host logs URLs: strip credentials that often ride in
 // them. Masked: user:password, query params with a secret-sounding name, and any path segment, query value
 // or fragment that looks like a token (ZB-5). common/zbcore.py:redact_url applies the same rules.
@@ -164,5 +197,6 @@ function zbRedactUrl(url) {
 
 if (typeof module !== "undefined") {
   module.exports = { zbOriginOf, zbArmable, zbEntryMatches, zbInScope, zbHostPattern, zbGlobMatch,
-    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem, zbSanitizeSettings, zbRedactUrl, zbSecretValue };
+    zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem, zbSanitizeSettings, zbRedactUrl, zbSecretValue,
+    zbIsLocal, zbCrossingNeedsOk, zbSettingsDiff, zbVersionLess };
 }

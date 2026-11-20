@@ -35,13 +35,16 @@ done
 
 echo "== Claude Code MCP registration"
 if command -v claude >/dev/null 2>&1; then
-  claude mcp remove --scope user zenbridge >/dev/null 2>&1 && echo "   removed user-scope MCP server 'zenbridge'" \
-    || echo "   absent: user-scope MCP server 'zenbridge'"
+  # Same removals as ./install.sh without --global, plus the registration for the folder you run this from.
+  claude mcp remove --scope user zenbridge >/dev/null 2>&1 && echo "   removed: Claude Code user-scope (every project) MCP server 'zenbridge'" \
+    || echo "   none: no user-scope registration"
+  claude mcp remove --scope local zenbridge >/dev/null 2>&1 && echo "   removed: local-scope MCP server 'zenbridge' for $(pwd -P)" \
+    || echo "   none: no local-scope registration for $(pwd -P)"
 else
   echo "   'claude' not on PATH; run: claude mcp remove --scope user zenbridge"
 fi
 
-echo "   per-project registrations: run 'claude mcp remove zenbridge' in each project you added it to"
+echo "   other projects: run 'claude mcp remove zenbridge' in each project you added it to"
 
 echo "== Claude desktop app MCP registration"
 case "$(uname -s)" in
@@ -57,7 +60,7 @@ with open(path) as f:
 servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
 entry = servers.get("zenbridge") if isinstance(servers, dict) else None
 if not (isinstance(entry, dict) and any(str(a).endswith("zenbridge_mcp.py") for a in entry.get("args", []))):
-    print(f"   absent: zenbridge in {path}")
+    print(f"   none: no zenbridge entry in {path}")
     sys.exit(0)
 del servers["zenbridge"]
 tmp = path + ".zenbridge-tmp"
@@ -66,7 +69,7 @@ with os.fdopen(fd, "w") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
 os.replace(tmp, path)
-print(f"   removed zenbridge from {path}")
+print(f"   removed: zenbridge from Claude desktop chats ({path})")
 PY
 else
   echo "   absent: $CLAUDE_CFG"

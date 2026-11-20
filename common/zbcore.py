@@ -22,6 +22,14 @@ MAX_FRAME = LIMITS["maxFrameBytes"]
 TOOLS = SCHEMA["tools"]
 
 
+def timeout_for(tool):
+    """Seconds to wait for the extension. Tools marked x-confirm may wait for the user's click first."""
+    if tool == "screenshot":
+        return LIMITS["screenshotTimeoutSeconds"]
+    extra = LIMITS["confirmTimeoutSeconds"] if TOOLS.get(tool, {}).get("x-confirm") else 0
+    return LIMITS["timeoutSeconds"] + extra
+
+
 # ---------------------------------------------------------------- validation
 def _type_ok(t, v):
     if t == "object":

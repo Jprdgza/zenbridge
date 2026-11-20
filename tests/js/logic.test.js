@@ -249,3 +249,45 @@ test("zbRedactUrl / zbSecretValue: tokens masked, slugs and ids kept (ZB-5)", ()
   for (const v of ["eyJhbGciOi", "0123456789abcdef0123", "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5"]) assert.ok(L.zbSecretValue(v), v);
   for (const v of ["my-blog-post-about-things-2024", "created_at", "20241118", "getting-started", "", null]) assert.ok(!L.zbSecretValue(v), String(v));
 });
+
+test("zbIsLocal: the allowlist plus names that always mean this computer (ZB-8)", () => {
+  const allow = ZB_CONFIG.allowlist;
+  for (const o of ["http://localhost:5173", "http://127.0.0.1:8000", "http://[::1]:3000", "https://localhost", "http://app.localhost:3000",
+    "http://127.1.2.3", "http://0.0.0.0:8080"]) assert.ok(L.zbIsLocal(o, allow), o);
+  for (const o of ["https://github.com", "http://localhost.evil.example", "http://127.0.0.1.evil.example", "http://192.168.1.5", null])
+    assert.ok(!L.zbIsLocal(o, allow), String(o));
+  assert.ok(L.zbIsLocal("http://192.168.1.5:8000", [...allow, "http://192.168.1.5:*"]), "anything you add to the allowlist");
+});
+
+test("zbCrossingNeedsOk: public <-> local moves need your OK (ZB-8)", () => {
+  const st = (touched, handArmedLocal = false, approved = []) => ({ touched: new Set(touched), handArmedLocal, approved: new Set(approved) });
+  const L1 = "http://localhost:5173", P = "https://github.com";
+  assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st([])), true, "you never armed a local tab");
+  assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st([], true)), false, "you armed one by hand");
+  assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st(["local"], true)), false);
+  assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st(["public"], true)), true, "tainted by a public page");
+  assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st(["public"], true, [L1])), false, "you already allowed it");
+  assert.strictEqual(L.zbCrossingNeedsOk(P, false, st([])), false);
+  assert.strictEqual(L.zbCrossingNeedsOk(P, false, st(["public"])), false);
+  assert.strictEqual(L.zbCrossingNeedsOk(P, false, st(["local"], true)), true, "the other direction");
+  assert.strictEqual(L.zbCrossingNeedsOk(P, false, st(["local"], true, [P])), false);
+});
+
+test("zbSettingsDiff: only settings that differ from the defaults are saved (ZB-9)", () => {
+  const { ZB_DEFAULTS, ZB_TUNABLE } = require(path.join(EXT, "config.js"));
+  const full = L.zbSanitizeSettings({}, ZB_DEFAULTS, ZB_TUNABLE);
+  assert.deepStrictEqual(L.zbSettingsDiff(full, ZB_DEFAULTS, ZB_TUNABLE), {});
+  assert.deepStrictEqual(L.zbSettingsDiff({ ...full, goAnywhere: true, allowlist: ["http://localhost:*"] }, ZB_DEFAULTS, ZB_TUNABLE),
+    { goAnywhere: true, allowlist: ["http://localhost:*"] });
+  assert.deepStrictEqual(L.zbSettingsDiff({ alwaysOn: false, bogus: 1 }, ZB_DEFAULTS, ZB_TUNABLE), {});
+});
+
+test("zbVersionLess", () => {
+  assert.ok(L.zbVersionLess("1.5.0", "1.5.2"));
+  assert.ok(L.zbVersionLess("1.5.1", "1.5.2"));
+  assert.ok(L.zbVersionLess("1.4.10", "1.5.0"));
+  assert.ok(!L.zbVersionLess("1.5.2", "1.5.2"));
+  assert.ok(!L.zbVersionLess("1.10.0", "1.5.2"));
+  assert.ok(L.zbVersionLess(undefined, "1.5.2"));
+  assert.ok(L.zbVersionLess("1.5", "1.5.2"));
+});

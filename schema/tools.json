@@ -7,7 +7,8 @@
   "maxUrlPattern": 500,
   "maxUrl": 2048,
   "timeoutSeconds": 15,
-  "screenshotTimeoutSeconds": 30
+  "screenshotTimeoutSeconds": 30,
+  "confirmTimeoutSeconds": 60
  },
  "errorCodes": [
   "NOT_ARMED",
@@ -257,7 +258,8 @@
    }
   },
   "tab_open": {
-   "description": "Open a new tab on any http/https site (go-anywhere mode; otherwise localhost or a site already armed). It is armed automatically when a Claude session is active or the user has armed a tab; check the 'armed' field.",
+   "description": "Open a new tab on any http/https site (go-anywhere mode; otherwise localhost or a site already armed). It is armed automatically when a Claude session is active or the user has armed a tab; check the 'armed' field. Moving between public sites and local addresses (localhost) waits for the user to click Allow in a zenbridge window (up to 60 s); REFUSED means they said no.",
+   "x-confirm": true,
    "args": {
     "type": "object",
     "additionalProperties": false,
@@ -329,7 +331,8 @@
    }
   },
   "navigate": {
-   "description": "Navigate an armed tab to an http/https URL in that tab's scope (any site in go-anywhere mode), or go back/forward in its history (history: \"back\" | \"forward\").",
+   "description": "Navigate an armed tab to an http/https URL in that tab's scope (any site in go-anywhere mode), or go back/forward in its history (history: \"back\" | \"forward\"). Moving between public sites and local addresses (localhost) waits for the user to click Allow in a zenbridge window (up to 60 s); REFUSED means they said no.",
+   "x-confirm": true,
    "args": {
     "type": "object",
     "additionalProperties": false,
@@ -1787,7 +1790,8 @@
    }
   },
   "file_upload": {
-   "description": "Upload local files (absolute paths, up to 10 MB in total) to a file input, or drop them on a drop zone, given by ref, selector or x+y. Don't click file inputs: the native picker can't be driven. Hidden files and folders (like ~/.ssh) are refused.",
+   "description": "Upload local files (absolute paths, up to 10 MB in total) to a file input, or drop them on a drop zone, given by ref, selector or x+y. Don't click file inputs: the native picker can't be driven. Only files in ~/Downloads, ~/Desktop or folders the user listed in ZENBRIDGE_UPLOAD_DIRS; hidden files, keys, credentials and other secret-looking files are refused. The user must click Allow in a zenbridge window for every upload (up to 60 s); REFUSED means they said no.",
+   "x-confirm": true,
    "args": {
     "type": "object",
     "additionalProperties": false,
@@ -1912,13 +1916,18 @@
     "required": [
      "files",
      "bytes",
-     "target"
+     "target",
+     "origin"
     ],
     "properties": {
      "files": {
       "type": "integer",
       "minimum": 0,
       "maximum": 10
+     },
+     "origin": {
+      "type": "string",
+      "maxLength": 2048
      },
      "bytes": {
       "type": "integer",

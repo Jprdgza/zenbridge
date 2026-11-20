@@ -105,7 +105,46 @@ else
   echo "   Claude desktop app not found; skipped"
 fi
 else
-  echo "== MCP server: register it only in the projects that need the browser (recommended)"
+echo "== removing every-project registrations (use --global to keep them)"
+# An older install (or --global) may have registered zenbridge for every Claude Code project and for Claude
+# desktop chats. The safe default is per project only, so take those away and say so (ZB-9).
+if command -v claude >/dev/null 2>&1; then
+  if claude mcp remove --scope user zenbridge >/dev/null 2>&1; then
+    echo "   removed: Claude Code user-scope (every project) MCP server 'zenbridge'"
+  else
+    echo "   none: no user-scope registration"
+  fi
+else
+  echo "   'claude' not on PATH; if you registered it for every project, run: claude mcp remove --scope user zenbridge"
+fi
+case "$(uname -s)" in
+  Darwin) CLAUDE_CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json" ;;
+  *) CLAUDE_CFG="$HOME/.config/Claude/claude_desktop_config.json" ;;
+esac
+if [ -f "$CLAUDE_CFG" ]; then
+  "$PYTHON" -I - "$CLAUDE_CFG" <<'PY' || echo "   could not edit $CLAUDE_CFG; remove mcpServers.zenbridge yourself"
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    cfg = json.load(f)
+servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
+entry = servers.get("zenbridge") if isinstance(servers, dict) else None
+if not (isinstance(entry, dict) and any(str(a).endswith("zenbridge_mcp.py") for a in entry.get("args", []))):
+    print(f"   none: no zenbridge entry in {path}")
+    sys.exit(0)
+del servers["zenbridge"]
+tmp = path + ".zenbridge-tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+print(f"   removed: zenbridge from Claude desktop chats ({path}); quit and reopen the Claude app")
+PY
+else
+  echo "   none: no Claude desktop config"
+fi
+echo "== MCP server: register it only in the projects that need the browser (recommended)"
   echo "   Run this inside each such project (private to you, not written into the repo):"
   echo "   claude mcp add --scope local zenbridge -- $PYTHON -I $SERVER"
   echo "   (--scope project instead writes .mcp.json, shared with everyone who clones the repo.)"

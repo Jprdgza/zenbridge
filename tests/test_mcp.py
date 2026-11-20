@@ -102,16 +102,53 @@ class UploadTest(unittest.TestCase):
             self.assertEqual(b.calls, [], path)
 
     def test_only_allowed_folders(self):
-        outside = tempfile.mkdtemp(prefix="zbout", dir=ROOT)  # not in ZENBRIDGE_UPLOAD_DIRS, not the cwd
+        outside = tempfile.mkdtemp(prefix="zbout", dir=ROOT)  # not in ZENBRIDGE_UPLOAD_DIRS
         self.addCleanup(__import__("shutil").rmtree, outside, True)
         path = os.path.join(outside, "report.pdf")
         with open(path, "wb") as f:
             f.write(b"x")
-        with mock.patch.object(mcp.os, "getcwd", return_value="/"):
-            with self.assertRaisesRegex(ValueError, "only files in the project folder"):
+        with mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": ""}):
+            with self.assertRaisesRegex(ValueError, r"only files in ~/Downloads or ~/Desktop"):
                 mcp.read_upload(path)
-            with mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": outside}):
-                self.assertEqual(mcp.read_upload(path)[0], "report.pdf")
+        with mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": outside}):
+            self.assertEqual(mcp.read_upload(path)[0], "report.pdf")
+
+    def test_project_folder_is_opt_in(self):
+        """ZB-7: the folder Claude Code runs in is no longer an upload root unless you list it."""
+        project = tempfile.mkdtemp(prefix="zbproj", dir=ROOT)
+        self.addCleanup(__import__("shutil").rmtree, project, True)
+        path = os.path.join(project, "notes.txt")
+        with open(path, "wb") as f:
+            f.write(b"x")
+        with mock.patch.object(mcp.os, "getcwd", return_value=project), mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": ""}):
+            self.assertNotIn(mcp._dir_key(project), mcp.upload_roots())
+            with self.assertRaises(ValueError):
+                mcp.read_upload(path)
+        with mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": project}):
+            self.assertEqual(mcp.read_upload(path)[0], "notes.txt")
+
+    def test_secret_looking_names_refused_in_any_case(self):
+        """ZB-7: keys, credentials and infrastructure state are refused even in an allowed folder."""
+        secret = ["credentials.json", "service-account.json", "Service-Account-prod.JSON", "prod.pem", "server.KEY",
+                  "cert.p12", "cert.pfx", "keystore.jks", "release.keystore", "vault.kdbx", "office.ovpn", "putty.ppk",
+                  "terraform.tfstate", "terraform.tfstate.backup", "id_rsa", "id_ed25519", "ID_ECDSA.pub", "id_dsa",
+                  "aws_credentials", "client_secret_123.json", "my-SECRETS.txt", "App.mobileprovision"]
+        for name in secret:
+            path = self.file(name, b"x")
+            with self.assertRaisesRegex(ValueError, "keys, credentials or secrets", msg=name):
+                mcp.read_upload(path)
+            b = UploadBridge()
+            self.assertTrue(self.call({"tabId": 1, "ref": "ref_1", "paths": [path]}, b).get("isError"), name)
+            self.assertEqual(b.calls, [], name)
+        for name in ("resume.pdf", "photo.png", "keynote.key.pdf", "identity.txt", "pemberton.docx", "account.json"):
+            self.assertEqual(mcp.read_upload(self.file(name, b"x"))[0], name)
+
+    def test_secret_name_checked_on_the_resolved_file(self):
+        target = self.file("id_ed25519", b"KEY")
+        link = os.path.join(self.dir, "holiday.jpg")
+        os.symlink(target, link)
+        with self.assertRaisesRegex(ValueError, "keys, credentials or secrets"):
+            mcp.read_upload(link)
 
     def test_credential_files_refused_even_in_allowed_folders(self):
         for name in ("logins.json", "key4.db", "cookies.sqlite", "Login Data", "Cookies", "COOKIES", "login.keychain-db"):
@@ -121,8 +158,7 @@ class UploadTest(unittest.TestCase):
 
     def test_too_broad_roots_ignored(self):
         home = mcp._dir_key(mcp.HOME)
-        with mock.patch.object(mcp.os, "getcwd", return_value="/"), \
-                mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": os.pathsep.join([mcp.HOME, "/", "relative/dir"])}):
+        with mock.patch.dict(os.environ, {"ZENBRIDGE_UPLOAD_DIRS": os.pathsep.join([mcp.HOME, "/", "relative/dir"])}):
             roots = mcp.upload_roots()
         self.assertNotIn(home, roots)
         self.assertNotIn(mcp._dir_key("/"), roots)

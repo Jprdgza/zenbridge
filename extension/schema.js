@@ -159,6 +159,7 @@ const ZB_SCHEMA = {
   "INTERNAL"
  ],
  "limits": {
+  "confirmTimeoutSeconds": 60,
   "maxFrameBytes": 16777216,
   "maxSelector": 1000,
   "maxText": 10000,
@@ -535,7 +536,7 @@ const ZB_SCHEMA = {
      ]
     }
    },
-   "description": "Upload local files (absolute paths, up to 10 MB in total) to a file input, or drop them on a drop zone, given by ref, selector or x+y. Don't click file inputs: the native picker can't be driven. Hidden files and folders (like ~/.ssh) are refused.",
+   "description": "Upload local files (absolute paths, up to 10 MB in total) to a file input, or drop them on a drop zone, given by ref, selector or x+y. Don't click file inputs: the native picker can't be driven. Only files in ~/Downloads, ~/Desktop or folders the user listed in ZENBRIDGE_UPLOAD_DIRS; hidden files, keys, credentials and other secret-looking files are refused. The user must click Allow in a zenbridge window for every upload (up to 60 s); REFUSED means they said no.",
    "result": {
     "additionalProperties": false,
     "properties": {
@@ -549,6 +550,10 @@ const ZB_SCHEMA = {
       "minimum": 0,
       "type": "integer"
      },
+     "origin": {
+      "maxLength": 2048,
+      "type": "string"
+     },
      "target": {
       "enum": [
        "input",
@@ -560,10 +565,12 @@ const ZB_SCHEMA = {
     "required": [
      "files",
      "bytes",
-     "target"
+     "target",
+     "origin"
     ],
     "type": "object"
    },
+   "x-confirm": true,
    "x-mcpArgs": {
     "additionalProperties": false,
     "properties": {
@@ -1032,7 +1039,7 @@ const ZB_SCHEMA = {
      ]
     }
    },
-   "description": "Navigate an armed tab to an http/https URL in that tab's scope (any site in go-anywhere mode), or go back/forward in its history (history: \"back\" | \"forward\").",
+   "description": "Navigate an armed tab to an http/https URL in that tab's scope (any site in go-anywhere mode), or go back/forward in its history (history: \"back\" | \"forward\"). Moving between public sites and local addresses (localhost) waits for the user to click Allow in a zenbridge window (up to 60 s); REFUSED means they said no.",
    "result": {
     "additionalProperties": false,
     "properties": {
@@ -1051,7 +1058,8 @@ const ZB_SCHEMA = {
      "url"
     ],
     "type": "object"
-   }
+   },
+   "x-confirm": true
   },
   "network_requests": {
    "args": {
@@ -1670,7 +1678,7 @@ const ZB_SCHEMA = {
     ],
     "type": "object"
    },
-   "description": "Open a new tab on any http/https site (go-anywhere mode; otherwise localhost or a site already armed). It is armed automatically when a Claude session is active or the user has armed a tab; check the 'armed' field.",
+   "description": "Open a new tab on any http/https site (go-anywhere mode; otherwise localhost or a site already armed). It is armed automatically when a Claude session is active or the user has armed a tab; check the 'armed' field. Moving between public sites and local addresses (localhost) waits for the user to click Allow in a zenbridge window (up to 60 s); REFUSED means they said no.",
    "result": {
     "additionalProperties": false,
     "properties": {
@@ -1693,7 +1701,8 @@ const ZB_SCHEMA = {
      "note"
     ],
     "type": "object"
-   }
+   },
+   "x-confirm": true
   },
   "tab_switch": {
    "args": {

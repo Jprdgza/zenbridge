@@ -10,8 +10,9 @@ const plain = (x) => JSON.parse(JSON.stringify(x, (k, v) => (Object.prototype.to
 const manifest = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"));
 
 // Default: restricted mode (goAnywhere false). Pass goAnywhere: true for the shipped config.
+// confirm: how "you" answer zenbridge's Allow window: "allow", "deny", or "ignore" (never answer).
 function load({ grant = true, page = {}, hasPermission = true, goAnywhere = false, alwaysOn = false, stored = undefined, hang = [],
-  sessionStartedAt = Date.now() } = {}) {
+  sessionStartedAt = Date.now(), confirm = "allow" } = {}) {
   const calls = [];
   const kept = sessionStartedAt ? { sessionStartedAt } : {};  // storage.local besides settings
   const on = {};
@@ -40,8 +41,17 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
       ungroup: async (id) => calls.push(["ungroup", id]),
       captureTab: async (id, o) => { if (hang.includes("capture")) return new Promise(() => {}); calls.push(["capture", id, plain(o)]); return o.format === "png" ? "data:image/png;base64,QUJD" : "data:image/jpeg;base64,QUJD"; },
     },
-    windows: { get: async (id) => ({ id, state: "maximized" }),
-      update: async (id, p) => { calls.push(["windows.update", id, plain(p)]); return { id, width: p.width || 1, height: p.height || 1 }; } },
+    windows: { get: async (id) => ({ id, state: "maximized" }), onRemoved: ev("windowRemoved"),
+      update: async (id, p) => { calls.push(["windows.update", id, plain(p)]); return { id, width: p.width || 1, height: p.height || 1 }; },
+      create: async (p) => {
+        const qid = p.url.split("#")[1];
+        const details = JSON.parse(ctx.zbConfirmDetails(qid));
+        calls.push(["confirm", details]);
+        asked.push(details);
+        if (confirm !== "ignore") setImmediate(() => ctx.zbConfirmAnswer(qid, confirm === "allow"));
+        return { id: 900 + asked.length };
+      },
+      remove: async (id) => calls.push(["windows.remove", id]) },
     webRequest: { onBeforeRequest: ev("beforeRequest"), onCompleted: ev("completed"), onErrorOccurred: ev("netError") },
     tabGroups: { update: async (gid, p) => calls.push(["tabGroups.update", gid, plain(p)]) },
     commands: { onCommand: ev("command") },
@@ -54,13 +64,15 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
       executeScript: async ({ target, func, args }) => {
       if (hang.includes(func.name)) return new Promise(() => {});
       calls.push(["exec", target.tabId, func.name, plain(target.frameIds), plain(args[0])]);
-      const r = func.name === "zbShow" && !(func.name in page) ? { ok: true } : page[func.name];
+      const r = func.name === "zbShow" && !(func.name in page) ? { ok: true, visible: true } : page[func.name];
       return [{ result: typeof r === "function" ? r(args[0]) : r }];
     } },
-    runtime: { getURL: (p) => `moz-extension://zb/${p}`, connectNative: (name) => { calls.push(["connectNative", name]); return port; } },
+    runtime: { getURL: (p) => `moz-extension://zb/${p}`, onInstalled: ev("installed"),
+      connectNative: (name) => { calls.push(["connectNative", name]); return port; } },
   };
   const timers = hang.length ? { setTimeout, clearTimeout } : { setTimeout: () => 0, clearTimeout: () => {} };
-  const ctx = vm.createContext({ browser, URL, ...timers, console });
+  const asked = [];  // what the Allow window showed, in order
+  const ctx = vm.createContext({ browser, URL, crypto, ...timers, console });
   for (const f of manifest.background.scripts) {
     let src = fs.readFileSync(path.join(EXT, f), "utf8");
     if (f === "background.js" && hang.length) src = src.replace(/15000/g, "60").replace(/ms = 8000/g, "ms = 40").replace(/, 1500\)/g, ", 20)");
@@ -75,7 +87,7 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
     on.click({ ...tabs[tabId], id: tabId }, { modifiers: shift ? ["Shift"] : [], button: 0 });
     await new Promise((r) => setImmediate(r));
   };
-  return { ctx, calls, on, tabs, port, call, armed, click, kept };
+  return { ctx, calls, on, tabs, port, call, armed, click, kept, asked };
 }
 
 test("connects to the native host by name on startup", () => {
@@ -535,10 +547,27 @@ test("activity cue: cursor before clicks, overlay hidden during screenshot captu
   assert.deepStrictEqual(seq, ["zbPageMetrics", "zbShow", "capture", "zbShow"]);
 });
 
-test("a failing cue never breaks the action", async () => {
-  const b = load({ page: { zbShow: { ok: false, code: "INTERNAL" }, zbScroll: { ok: true, scrollX: 0, scrollY: 9 } } });
-  await b.click(1);
-  assert.strictEqual((await b.call("scroll", { tabId: 1, dy: 9 })).result.scrollY, 9);
+test("a page that hides or covers the activity overlay gets no actions (R-017)", async () => {
+  for (const zbShow of [{ ok: true, visible: false }, { ok: true }, { ok: false, code: "INTERNAL" }]) {
+    const b = load({ page: { zbShow, zbScroll: { ok: true, scrollX: 0, scrollY: 9 }, zbReadText: { ok: true, title: "", text: "", links: [] } } });
+    await b.click(1);
+    const r = await b.call("scroll", { tabId: 1, dy: 9 });
+    assert.ok(["REFUSED", "INTERNAL"].includes(r.error.code), JSON.stringify(r));
+    assert.strictEqual((await b.call("read_page", { tabId: 1 })).ok, false);
+    assert.ok(!b.calls.some((c) => c[0] === "exec" && ["zbScroll", "zbReadText"].includes(c[2])), "the action never ran");
+  }
+  const hidden = load({ page: { zbShow: { ok: true, visible: false }, zbScroll: { ok: true, scrollX: 0, scrollY: 9 } } });
+  await hidden.click(1);
+  assert.match((await hidden.call("scroll", { tabId: 1, dy: 9 })).error.message, /hides or covers/);
+  // With activity cues switched off in settings there is no overlay to check.
+  const off = load({ stored: { showActivity: false }, page: { zbShow: { ok: true, visible: false }, zbScroll: { ok: true, scrollX: 0, scrollY: 9 } } });
+  await off.click(1);
+  assert.strictEqual((await off.call("scroll", { tabId: 1, dy: 9 })).result.scrollY, 9);
+  // Hiding the overlay for a screenshot, and re-showing it after, never fail the capture.
+  const shot = load({ page: { zbShow: { ok: false, code: "INTERNAL" },
+    zbPageMetrics: { ok: true, foreignFrames: 0, scrollX: 0, scrollY: 0, vw: 10, vh: 10, dw: 10, dh: 10 } } });
+  await shot.click(1);
+  assert.ok((await shot.call("screenshot", { tabId: 1 })).ok);
 });
 
 // ------------------------------------------------------------ Chrome-parity tools
@@ -653,7 +682,8 @@ test("file_upload: pieces are reassembled for the page; incomplete, oversized or
   assert.strictEqual((await b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [id] })).error.code, "INVALID");  // incomplete
   assert.strictEqual((await chunk(1, "REVG")).result.received, 2);
   const r = await b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [id] });
-  assert.deepStrictEqual(r.result, { files: 1, bytes: 3, target: "input" });
+  assert.deepStrictEqual(r.result, { files: 1, bytes: 3, target: "input", origin: "http://localhost:3000" });
+  assert.deepStrictEqual(b.asked.at(-1), { kind: "upload", origin: "http://localhost:3000", files: [{ name: "a.txt", bytes: 6 }] });
   assert.deepStrictEqual(execs(b).at(-1), { op: "upload", ref: "ref_1", files: [{ name: "a.txt", mimeType: "text/plain", data: "QUJDREVG" }] });
   assert.strictEqual((await b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [id] })).error.code, "INVALID");  // used up
   assert.strictEqual((await chunk(0, "QUJD", { name: "b.txt" })).result.received, 1);
@@ -673,4 +703,194 @@ test("wait_for: polls in the page with a timeout above its own", async () => {
   assert.deepStrictEqual((await b.call("wait_for", { tabId: 1, text: "Saved" })).result, { met: true, waited: 1.2 });
   assert.deepStrictEqual(execs(b).at(-1), { op: "wait", text: "Saved", gone: false, seconds: 3 });
   assert.deepStrictEqual((await b.call("wait_for", { tabId: 1, seconds: 0 })).result, { met: true, waited: 0 });
+});
+
+// ------------------------------------------------------------ ZB-7: you allow every upload
+async function readyUpload(b, name = "id_card.png") {
+  const id = "c".repeat(32);
+  await b.call("upload_chunk", { uploadId: id, index: 0, total: 1, name, mimeType: "image/png", data: "QUJDRA==" });
+  return id;
+}
+const uploadPage = () => pageOps({ upload: (a) => ({ ok: true, files: a.files.length, bytes: 4, target: "input" }) });
+
+test("file_upload waits for your Allow in a zenbridge window; Don't allow or no answer refuses it (ZB-7)", async () => {
+  const yes = load({ page: uploadPage() });
+  await yes.click(1);
+  const r = await yes.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [await readyUpload(yes)] });
+  assert.strictEqual(r.result.origin, "http://localhost:3000");
+  assert.deepStrictEqual(yes.asked, [{ kind: "upload", origin: "http://localhost:3000", files: [{ name: "id_card.png", bytes: 4 }] }]);
+  const ask = yes.calls.findIndex((c) => c[0] === "confirm");
+  const put = yes.calls.findIndex((c) => c[0] === "exec" && c[2] === "zbPage" && c[4].op === "upload");
+  assert.ok(ask >= 0 && ask < put, "asked before the file reached the page");
+  assert.ok(yes.calls.some((c) => c[0] === "windows.remove"), "the window closes once answered");
+
+  const no = load({ page: uploadPage(), confirm: "deny" });
+  await no.click(1);
+  const d = await no.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [await readyUpload(no)] });
+  assert.strictEqual(d.error.code, "REFUSED");
+  assert.match(d.error.message, /did not allow this upload/);
+  assert.ok(!execs(no).some((a) => a.op === "upload"), "nothing reached the page");
+  assert.strictEqual((await no.call("file_upload", { tabId: 1, ref: "ref_1", uploads: ["c".repeat(32)] })).error.code, "INVALID",
+    "a refused upload is gone; it can't be retried without asking again");
+
+  // No answer: the window stays up; Alt+Shift+K (or the 60 s timeout, or closing it) answers no.
+  const quiet = load({ page: uploadPage(), confirm: "ignore" });
+  await quiet.click(1);
+  const pending = quiet.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [await readyUpload(quiet)] });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(quiet.asked.length, 1);
+  quiet.on.windowRemoved(901);  // you close the window
+  assert.strictEqual((await pending).error.code, "REFUSED");
+  assert.ok(!execs(quiet).some((a) => a.op === "upload"));
+});
+
+test("file_upload: if the tab moves to another site while you decide, nothing is uploaded (ZB-7)", async () => {
+  const b = load({ page: uploadPage(), confirm: "ignore" });
+  await b.click(1);
+  const pending = b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [await readyUpload(b)] });
+  await new Promise((r) => setImmediate(r));
+  b.tabs[1].url = "http://localhost:4000/other";  // still in scope, but not the site you were shown
+  const qid = vm.runInContext("[...confirms.keys()][0]", b.ctx);
+  b.ctx.zbConfirmAnswer(qid, true);
+  const r = await pending;
+  assert.strictEqual(r.error.code, "REFUSED");
+  assert.match(r.error.message, /page changed/);
+  assert.ok(!execs(b).some((a) => a.op === "upload"));
+});
+
+test("the timeout for questions comes from the schema, and nothing but the confirm page answers them", () => {
+  const b = load({ confirm: "ignore" });
+  assert.strictEqual(vm.runInContext("ZB_SCHEMA.limits.confirmTimeoutSeconds", b.ctx), 60);
+  const src = fs.readFileSync(path.join(EXT, "background.js"), "utf8");
+  assert.strictEqual(src.match(/zbConfirmAnswer\(/g).length, 1, "defined once, called by nothing in the background");
+  const page = fs.readFileSync(path.join(EXT, "pages", "confirm.js"), "utf8");
+  assert.match(page, /e\.isTrusted && !\$\("allow"\)\.disabled\) reply\(true\)/, "only a trusted click on an enabled Allow says yes");
+});
+
+// ------------------------------------------------------------ ZB-8: public <-> local is your call
+function sessionOn(b) { b.on.permAdded({ origins: ["<all_urls>"], permissions: [] }); }
+async function startSession(b) {
+  b.tabs[9] = { url: "about:newtab", windowId: 1 };
+  await b.click(9);
+  sessionOn(b);
+}
+const readable = { zbReadText: { ok: true, title: "t", text: "page text", truncated: false, links: [] } };
+
+test("during a session, tab_open to localhost from a public armed tab waits for your Allow (ZB-8)", async () => {
+  const b = load({ page: readable, confirm: "ignore" });
+  await startSession(b);
+  await b.click(3);  // you hand Claude github.com
+  assert.ok((await b.call("read_page", { tabId: 3 })).ok);  // it reads the public page (maybe an injection)
+  const pending = b.call("tab_open", { url: "http://localhost:8080/admin" });
+  await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual(b.asked, [{ kind: "cross", origin: "http://localhost:8080", local: true, seenPublic: true, seenLocal: false }]);
+  assert.ok(!b.calls.some((c) => c[0] === "create" && c[1].startsWith("http://localhost")), "not opened while waiting");
+  b.ctx.zbConfirmAnswer(vm.runInContext("[...confirms.keys()][0]", b.ctx), false);
+  const r = await pending;
+  assert.strictEqual(r.error.code, "REFUSED");
+  assert.ok(!b.calls.some((c) => c[0] === "create" && c[1].startsWith("http://localhost")));
+
+  const ok = load({ page: readable });
+  await startSession(ok);
+  await ok.click(3);
+  await ok.call("read_page", { tabId: 3 });
+  const opened = await ok.call("tab_open", { url: "http://localhost:8080/admin" });
+  assert.strictEqual(opened.result.armed, true);
+  assert.ok((await ok.call("read_page", { tabId: 50 })).ok, "allowed once: Claude can use it");
+  assert.ok((await ok.call("tab_open", { url: "http://localhost:8080/other" })).ok);
+  assert.strictEqual(ok.asked.length, 1, "asked once per site per session");
+});
+
+test("a local tab you armed yourself needs no question until Claude reads a public site (ZB-8)", async () => {
+  const b = load({ page: readable, confirm: "deny" });
+  await b.click(1);  // you arm localhost:3000 by hand
+  assert.ok((await b.call("read_page", { tabId: 1 })).ok);
+  assert.ok((await b.call("tab_open", { url: "http://localhost:5173/" })).ok, "other local addresses: no question");
+  assert.strictEqual(b.asked.length, 0);
+  // Now you also hand it a public page: going there after local work is a crossing.
+  await b.click(3);
+  const r = await b.call("read_page", { tabId: 3 });
+  assert.strictEqual(r.error.code, "REFUSED");
+  assert.deepStrictEqual(b.asked.at(-1), { kind: "cross", origin: "https://github.com", local: false, seenPublic: false, seenLocal: true });
+  assert.ok(!b.calls.some((c) => c[0] === "exec" && c[1] === 3 && c[2] === "zbReadText"), "the public page was never read");
+});
+
+test("after a public page, even your own local tab asks once; denying keeps it untouched (ZB-8)", async () => {
+  const b = load({ page: readable, confirm: "deny" });
+  await b.click(3);
+  assert.ok((await b.call("read_page", { tabId: 3 })).ok);  // public first
+  await b.click(1);  // then you arm a local tab
+  assert.strictEqual((await b.call("read_page", { tabId: 1 })).error.code, "REFUSED");
+  assert.ok(!b.calls.some((c) => c[0] === "exec" && c[1] === 1 && c[2] === "zbReadText"));
+  assert.ok((await b.call("read_page", { tabId: 3 })).ok, "the public tab keeps working");
+});
+
+test("Claude opening localhost when you never armed a local tab asks, even as the first thing (ZB-8)", async () => {
+  const b = load({ page: readable, confirm: "deny" });
+  await startSession(b);
+  assert.strictEqual((await b.call("tab_open", { url: "http://127.0.0.1:9000/" })).error.code, "REFUSED");
+  assert.strictEqual(b.asked[0].local, true);
+});
+
+test("go-anywhere: navigating a public tab to a local address, or clicking into one, asks first (ZB-8)", async () => {
+  const b = load({ goAnywhere: true, page: { ...readable, zbClick: { ok: true, tag: "a", text: "x" } }, confirm: "deny" });
+  await b.click(3);
+  assert.ok((await b.call("read_page", { tabId: 3 })).ok);
+  const nav = await b.call("navigate", { tabId: 3, url: "http://localhost:8080/" });
+  assert.strictEqual(nav.error.code, "REFUSED");
+  assert.ok(!b.calls.some((c) => c[0] === "update" && c[1] === 3), "never navigated");
+  b.tabs[3].url = "http://localhost:8080/";  // a link click or redirect got there anyway
+  assert.strictEqual((await b.call("read_page", { tabId: 3 })).error.code, "REFUSED");
+  assert.strictEqual((await b.call("click", { tabId: 3, selector: "a" })).error.code, "REFUSED");
+  assert.ok((await b.call("tab_switch", { tabId: 3 })).ok, "switching or closing a tab reads nothing and never asks");
+});
+
+test("Alt+Shift+K forgets what was seen and allowed, and answers open questions with no (ZB-8)", async () => {
+  const b = load({ page: readable });
+  await startSession(b);
+  await b.click(3);
+  await b.call("read_page", { tabId: 3 });
+  await b.call("tab_open", { url: "http://localhost:8080/" });
+  assert.strictEqual(b.asked.length, 1);
+  b.on.command("disarm-all");
+  assert.deepStrictEqual([vm.runInContext("crossing.touched.size", b.ctx), vm.runInContext("crossing.approved.size", b.ctx), vm.runInContext("crossing.handArmedLocal", b.ctx)], [0, 0, false]);
+  const q = load({ page: readable, confirm: "ignore" });
+  await startSession(q);
+  const pending = q.call("tab_open", { url: "http://localhost:8080/" });
+  await new Promise((r) => setImmediate(r));
+  q.on.command("disarm-all");
+  assert.strictEqual((await pending).error.code, "REFUSED");
+});
+
+// ------------------------------------------------------------ ZB-9: upgrades get the safe default
+test("updating from before 1.5.2 turns a saved alwaysOn off once, keeps only changed settings and says why (ZB-9)", async () => {
+  const old = { allowlist: ["http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*"], autoArmOpened: true, alwaysOn: true,
+    goAnywhere: true, showActivity: true, cursorDelayMs: 0, tabGroup: true };  // what 1.5.0's save() wrote (the test config's cursor pause is 0)
+  const b = load({ stored: old, alwaysOn: false, sessionStartedAt: Date.now() - 60000 });
+  await new Promise((r) => setImmediate(r));
+  await b.on.installed({ reason: "update", previousVersion: "1.5.0" });
+  assert.deepStrictEqual(plain(b.kept.settings), { goAnywhere: true });
+  assert.strictEqual(vm.runInContext("ZB_CONFIG.alwaysOn", b.ctx), false);
+  assert.ok(b.calls.some((c) => c[0] === "create" && c[1] === "moz-extension://zb/pages/notice.html"));
+  assert.strictEqual((await b.call("tabs_list", {})).result.session, false);
+
+  const from151 = load({ stored: { ...old, alwaysOn: true } });
+  await from151.on.installed({ reason: "update", previousVersion: "1.5.1" });
+  assert.deepStrictEqual(plain(from151.kept.settings), { goAnywhere: true }, "1.5.1 saved every key too");
+
+  const fine = load({ stored: { ...old, alwaysOn: false } });
+  await fine.on.installed({ reason: "update", previousVersion: "1.5.1" });
+  assert.ok(!fine.calls.some((c) => c[0] === "create"), "no notice when nothing was turned off");
+  for (const ev of [{ reason: "update", previousVersion: "1.5.2" }, { reason: "install" }]) {
+    const later = load({ stored: { alwaysOn: true } });
+    await later.on.installed(ev);
+    assert.strictEqual(later.kept.settings, undefined, JSON.stringify(ev));
+  }
+});
+
+test("an always-on session from before the update does not resume, even with a fresh start time (ZB-9)", async () => {
+  const b = load({ alwaysOn: true, stored: { alwaysOn: true }, sessionStartedAt: Date.now() - 1000 });
+  await b.on.installed({ reason: "update", previousVersion: "1.5.1" });
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  assert.strictEqual((await b.call("tabs_list", {})).result.session, false);
 });

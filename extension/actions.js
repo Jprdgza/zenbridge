@@ -159,15 +159,42 @@ function zbReadText(a, expectedOrigin) {
 // pill, a cursor that glides to the target, and a highlight box around the element being used.
 // Purely visual: pointer-events none, closed shadow root, CSSOM styles only (no innerHTML).
 // a = {hide:true} (before screenshots) | {kind:"glow"|"click"|"type"|"scroll", selector?, x?, y?}
+// The page must not be able to hide or cover it (R-017): the host element is a manual popover in the top
+// layer, re-shown on top before every action; its inline styles are !important and re-applied when the page
+// touches them; it is put back when removed. Returns visible:false if it still isn't on top and showing, and
+// the background then refuses the action.
 function zbShow(a, expectedOrigin) {
-  if (location.origin !== expectedOrigin) return { ok: true };
+  if (location.origin !== expectedOrigin) return { ok: false, code: "OUT_OF_SCOPE", message: "page origin changed" };
   const ACCENT = "#cba6f7", CRUST = "#11111b", RGB = "203,166,247";  // Catppuccin Mocha mauve / crust
+  const HOST_CSS = [["display", "block"], ["position", "fixed"], ["inset", "0"], ["width", "100vw"], ["height", "100vh"],
+    ["max-width", "none"], ["max-height", "none"], ["margin", "0"], ["padding", "0"], ["border", "0"], ["outline", "none"],
+    ["background", "transparent"], ["box-shadow", "none"], ["overflow", "visible"], ["pointer-events", "none"],
+    ["z-index", "2147483647"], ["opacity", "1"], ["visibility", "visible"], ["transform", "none"], ["translate", "none"],
+    ["scale", "none"], ["rotate", "none"], ["filter", "none"], ["backdrop-filter", "none"], ["clip-path", "none"],
+    ["mask", "none"], ["mix-blend-mode", "normal"], ["content-visibility", "visible"], ["contain", "none"],
+    ["zoom", "1"], ["transition", "none"], ["animation", "none"]];
+  const KEEP_ATTRS = ["id", "popover", "style"];
   let o = globalThis.__zbOverlay;
-  if (!o || !o.host.isConnected) {
+  const apply = () => {
+    o.obs.disconnect();
+    const de = document.documentElement;
+    if (o.host.parentNode !== de) de.appendChild(o.host);
+    for (const n of [...o.host.attributes].map((x) => x.name)) if (!KEEP_ATTRS.includes(n)) o.host.removeAttribute(n);
+    if (o.host.id !== "zenbridge-overlay") o.host.id = "zenbridge-overlay";
+    if (o.host.getAttribute("popover") !== "manual") o.host.setAttribute("popover", "manual");
+    o.host.removeAttribute("style");
+    for (const [k, v] of HOST_CSS) o.host.style.setProperty(k, k === "display" && o.hidden ? "none" : v, "important");
+    try {
+      if (o.host.matches(":popover-open")) o.host.hidePopover();
+      if (!o.hidden) o.host.showPopover();  // (re)opening puts it above anything the page put in the top layer
+    } catch (e) { /* not connected yet, or no popover support: the visibility check below decides */ }
+    o.obs.observe(de, { childList: true });
+    o.obs.observe(o.host, { attributes: true });
+  };
+  if (!o || !o.obs) {
     const stale = document.getElementById("zenbridge-overlay");
     if (stale) stale.remove();
     const host = document.createElement("div");
-    host.id = "zenbridge-overlay";
     const root = host.attachShadow({ mode: "closed" });
     const layer = (css) => {
       const d = document.createElement("div");
@@ -194,11 +221,19 @@ function zbShow(a, expectedOrigin) {
     for (const [k, v] of [["d", "M3 2l7 19 2.6-7.4L20 11z"], ["fill", ACCENT], ["stroke", CRUST], ["stroke-width", "1.5"], ["stroke-linejoin", "round"]]) path.setAttribute(k, v);
     svg.appendChild(path);
     cursor.appendChild(svg);
-    document.documentElement.appendChild(host);
-    o = globalThis.__zbOverlay = { host, root, glow, pill, box, cursor, timer: 0 };
+    o = globalThis.__zbOverlay = { host, root, glow, pill, box, cursor, timer: 0, hidden: false, fights: [], tampered: false };
+    // Put it back whenever the page removes or restyles it. A page that keeps undoing it (more than 20 times in
+    // 2 s) is marked tampered instead of fighting forever, and every later action on it is refused.
+    o.obs = new MutationObserver(() => {
+      const now = Date.now();
+      o.fights = o.fights.filter((t) => now - t < 2000).concat(now);
+      if (o.fights.length > 20) { o.tampered = true; o.obs.disconnect(); return; }
+      apply();
+    });
   }
-  if (a.hide) { o.host.style.setProperty("display", "none", "important"); return { ok: true }; }
-  o.host.style.setProperty("display", "block", "important");
+  o.hidden = !!a.hide;
+  apply();
+  if (a.hide) return { ok: true, visible: false };
   const show = (el, on) => el.style.setProperty("opacity", on ? "1" : "0");
   show(o.glow, true);
   show(o.pill, true);
@@ -213,7 +248,7 @@ function zbShow(a, expectedOrigin) {
       try { el = document.querySelector(a.selector); } catch (e) { el = null; }
     } else if (pointAt) el = document.elementFromPoint(a.x, a.y);
     else if (a.kind === "type") el = document.activeElement;
-    if (el === document.body || el === document.documentElement) el = null;
+    if (el === document.body || el === document.documentElement || el === o.host) el = null;
     if (el && !pointAt) {
       const b = el.getBoundingClientRect();
       if (b.bottom < 0 || b.top > window.innerHeight || b.right < 0 || b.left > window.innerWidth) el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
@@ -243,7 +278,29 @@ function zbShow(a, expectedOrigin) {
   }
   clearTimeout(o.timer);
   o.timer = setTimeout(() => { for (const e of [o.glow, o.pill, o.box, o.cursor]) show(e, false); }, 5000);
-  return { ok: true };
+  // Is it really showing? In the top layer, rendered (checkVisibility), and the topmost thing at the centre
+  // and near each corner (the glow takes hits for this one synchronous check, so the page can't react in between).
+  // While a modal <dialog> is open everything outside it is inert, so hit testing can't see the overlay; it was
+  // just re-opened after that dialog, so it is above it in the top layer anyway.
+  let why = o.tampered ? "the page keeps undoing it" : !o.host.isConnected ? "it was removed"
+    : !o.host.matches(":popover-open") ? "it is not in the top layer"
+      : !o.host.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true }) ? "it is not rendered" : "";
+  let modal = null;
+  try { modal = document.querySelector(":modal"); } catch (e) { modal = null; }
+  if (!why && !modal) {
+    const w = document.documentElement.clientWidth || window.innerWidth, h = document.documentElement.clientHeight || window.innerHeight;
+    o.glow.style.setProperty("pointer-events", "auto");
+    try {
+      // 24 px in from the edges: macOS overlay scrollbars sit above the top layer and take hits there.
+      const e = 24;
+      for (const [px, py] of [[w / 2, h / 2], [w / 2, e], [e, e], [w - e, e], [e, h - e], [w - e, h - e]]) {
+        const hit = document.elementFromPoint(px, py);
+        if (hit !== o.host) { why = `a ${hit ? String(hit.tagName).toLowerCase().slice(0, 20) : "nothing"} element is on top of it at ${Math.round(px)},${Math.round(py)}`; break; }
+      }
+    } finally { o.glow.style.setProperty("pointer-events", "none"); }
+  }
+  const visible = !why;
+  return { ok: true, visible, why };
 }
 
 function zbScroll(a, expectedOrigin) {
