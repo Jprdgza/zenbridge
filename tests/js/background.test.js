@@ -12,8 +12,9 @@ const manifest = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "ut
 // Default: restricted mode (goAnywhere false). Pass goAnywhere: true for the shipped config.
 // confirm: how "you" answer zenbridge's Allow window: "allow", "deny", or "ignore" (never answer).
 function load({ grant = true, page = {}, hasPermission = true, goAnywhere = false, alwaysOn = false, stored = undefined, hang = [],
-  sessionStartedAt = Date.now(), confirm = "allow" } = {}) {
+  sessionStartedAt = Date.now(), confirm = "allow", dns = {} } = {}) {
   const calls = [];
+  const guards = [];  // [page function, guard argument] per injection (ZB-11)
   const kept = sessionStartedAt ? { sessionStartedAt } : {};  // storage.local besides settings
   const on = {};
   const ev = (name) => ({ addListener: (f) => { on[name] = f; } });
@@ -52,7 +53,10 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
         return { id: 900 + asked.length };
       },
       remove: async (id) => calls.push(["windows.remove", id]) },
-    webRequest: { onBeforeRequest: ev("beforeRequest"), onCompleted: ev("completed"), onErrorOccurred: ev("netError") },
+    webRequest: { onBeforeRequest: ev("beforeRequest"), onCompleted: ev("completed"), onErrorOccurred: ev("netError"),
+      onHeadersReceived: ev("headers"), onResponseStarted: ev("responseStarted") },
+    // dns: { host: [addresses] | "fail" }; anything else resolves to a public address.
+    dns: { resolve: async (h) => { calls.push(["dns", h]); if (dns[h] === "fail") throw new Error("NS_ERROR_UNKNOWN_HOST"); return { addresses: dns[h] || ["93.184.216.34"], isTRR: false }; } },
     tabGroups: { update: async (gid, p) => calls.push(["tabGroups.update", gid, plain(p)]) },
     commands: { onCommand: ev("command") },
     permissions: { onAdded: ev("permAdded"), onRemoved: ev("permRemoved"), request: (p) => { calls.push(["permissions.request", plain(p.origins)]); return Promise.resolve(grant); },
@@ -64,6 +68,7 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
       executeScript: async ({ target, func, args }) => {
       if (hang.includes(func.name)) return new Promise(() => {});
       calls.push(["exec", target.tabId, func.name, plain(target.frameIds), plain(args[0])]);
+      guards.push([func.name, args.length > 2 ? args[2] : null]);
       const r = func.name === "zbShow" && !(func.name in page) ? { ok: true, visible: true } : page[func.name];
       return [{ result: typeof r === "function" ? r(args[0]) : r }];
     } },
@@ -87,7 +92,7 @@ function load({ grant = true, page = {}, hasPermission = true, goAnywhere = fals
     on.click({ ...tabs[tabId], id: tabId }, { modifiers: shift ? ["Shift"] : [], button: 0 });
     await new Promise((r) => setImmediate(r));
   };
-  return { ctx, calls, on, tabs, port, call, armed, click, kept, asked };
+  return { ctx, calls, on, tabs, port, call, armed, click, kept, asked, guards };
 }
 
 test("connects to the native host by name on startup", () => {
@@ -675,7 +680,7 @@ test("console_messages: capture starts on first call and is re-hooked after each
 test("file_upload: pieces are reassembled for the page; incomplete, oversized or Claude-off uploads are refused", async () => {
   const b = load({ page: pageOps({ upload: (a) => ({ ok: true, files: a.files.length, bytes: 3, target: "input" }) }) });
   const id = "a".repeat(32), chunk = (index, data, extra = {}) => b.call("upload_chunk",
-    { uploadId: id, index, total: 2, name: "a.txt", mimeType: "text/plain", data, ...extra });
+    { uploadId: id, index, total: 2, name: "a.txt", folder: "~/Downloads", mimeType: "text/plain", data, ...extra });
   assert.strictEqual((await chunk(0, "QUJD")).error.code, "NOT_ARMED");  // nothing armed, no session
   await b.click(1);
   assert.strictEqual((await chunk(0, "QUJD")).result.received, 1);
@@ -683,7 +688,7 @@ test("file_upload: pieces are reassembled for the page; incomplete, oversized or
   assert.strictEqual((await chunk(1, "REVG")).result.received, 2);
   const r = await b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [id] });
   assert.deepStrictEqual(r.result, { files: 1, bytes: 3, target: "input", origin: "http://localhost:3000" });
-  assert.deepStrictEqual(b.asked.at(-1), { kind: "upload", origin: "http://localhost:3000", files: [{ name: "a.txt", bytes: 6 }] });
+  assert.deepStrictEqual(b.asked.at(-1), { kind: "upload", origin: "http://localhost:3000", files: [{ name: "a.txt", folder: "~/Downloads", bytes: 6 }] });
   assert.deepStrictEqual(execs(b).at(-1), { op: "upload", ref: "ref_1", files: [{ name: "a.txt", mimeType: "text/plain", data: "QUJDREVG" }] });
   assert.strictEqual((await b.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [id] })).error.code, "INVALID");  // used up
   assert.strictEqual((await chunk(0, "QUJD", { name: "b.txt" })).result.received, 1);
@@ -691,7 +696,7 @@ test("file_upload: pieces are reassembled for the page; incomplete, oversized or
   const big = "A".repeat(600000);
   const codes = [];
   for (let i = 0; i < 30; i++) {
-    const r = await b.call("upload_chunk", { uploadId: "b".repeat(32), index: i, total: 40, name: "x", mimeType: "a/b", data: big });
+    const r = await b.call("upload_chunk", { uploadId: "b".repeat(32), index: i, total: 40, name: "x", folder: "~/Downloads", mimeType: "a/b", data: big });
     codes.push(r.ok ? "ok" : r.error.code);
   }
   assert.strictEqual(codes.indexOf("REFUSED"), 25);  // 25 pieces of 600k fill the 15M-character hold exactly
@@ -708,7 +713,7 @@ test("wait_for: polls in the page with a timeout above its own", async () => {
 // ------------------------------------------------------------ ZB-7: you allow every upload
 async function readyUpload(b, name = "id_card.png") {
   const id = "c".repeat(32);
-  await b.call("upload_chunk", { uploadId: id, index: 0, total: 1, name, mimeType: "image/png", data: "QUJDRA==" });
+  await b.call("upload_chunk", { uploadId: id, index: 0, total: 1, name, folder: "~/Downloads", mimeType: "image/png", data: "QUJDRA==" });
   return id;
 }
 const uploadPage = () => pageOps({ upload: (a) => ({ ok: true, files: a.files.length, bytes: 4, target: "input" }) });
@@ -718,7 +723,7 @@ test("file_upload waits for your Allow in a zenbridge window; Don't allow or no 
   await yes.click(1);
   const r = await yes.call("file_upload", { tabId: 1, ref: "ref_1", uploads: [await readyUpload(yes)] });
   assert.strictEqual(r.result.origin, "http://localhost:3000");
-  assert.deepStrictEqual(yes.asked, [{ kind: "upload", origin: "http://localhost:3000", files: [{ name: "id_card.png", bytes: 4 }] }]);
+  assert.deepStrictEqual(yes.asked, [{ kind: "upload", origin: "http://localhost:3000", files: [{ name: "id_card.png", folder: "~/Downloads", bytes: 4 }] }]);
   const ask = yes.calls.findIndex((c) => c[0] === "confirm");
   const put = yes.calls.findIndex((c) => c[0] === "exec" && c[2] === "zbPage" && c[4].op === "upload");
   assert.ok(ask >= 0 && ask < put, "asked before the file reached the page");
@@ -764,7 +769,7 @@ test("the timeout for questions comes from the schema, and nothing but the confi
   const src = fs.readFileSync(path.join(EXT, "background.js"), "utf8");
   assert.strictEqual(src.match(/zbConfirmAnswer\(/g).length, 1, "defined once, called by nothing in the background");
   const page = fs.readFileSync(path.join(EXT, "pages", "confirm.js"), "utf8");
-  assert.match(page, /e\.isTrusted && !\$\("allow"\)\.disabled\) reply\(true\)/, "only a trusted click on an enabled Allow says yes");
+  assert.match(page, /if \(pointerClick\(e\) && !\$\("allow"\)\.disabled\) reply\(true\)/, "only a trusted pointer click on an enabled Allow says yes (tests/js/confirm.test.js)");
 });
 
 // ------------------------------------------------------------ ZB-8: public <-> local is your call
@@ -893,4 +898,193 @@ test("an always-on session from before the update does not resume, even with a f
   await b.on.installed({ reason: "update", previousVersion: "1.5.1" });
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
   assert.strictEqual((await b.call("tabs_list", {})).result.session, false);
+});
+
+// ---------------------------------------------------------------- ZB-11
+test("ZB-11: after the cue, every acting page function is told to check the overlay itself, in its own task", async () => {
+  const b = load({ page: { zbClick: { ok: true, tag: "a", text: "" }, zbScroll: { ok: true, scrollX: 0, scrollY: 0, target: "page" },
+    zbReadText: { ok: true, title: "", text: "", links: [] }, zbFieldInfo: { ok: true, found: false },
+    zbType: { ok: true, tag: "input", typed: 1, method: "insertText" }, zbPage: { ok: true, matches: [], tag: "a", text: "", pressed: 1 },
+    zbPageMetrics: { ok: true, foreignFrames: 0, scrollX: 0, scrollY: 0, vw: 10, vh: 10, dw: 10, dh: 10 } } });
+  await b.click(1);
+  for (const [tool, args] of [["click", { selector: "a" }], ["scroll", { dy: 10 }], ["read_page", {}], ["type", { text: "x" }],
+                              ["find", { query: "x" }], ["key", { keys: "a" }], ["screenshot", {}]]) {
+    b.guards.length = 0;
+    const r = await b.call(tool, { tabId: 1, ...args });
+    assert.ok(r.ok, `${tool}: ${JSON.stringify(r.error)}`);
+    for (const [fn, g] of b.guards) {
+      if (["zbClick", "zbScroll", "zbReadText", "zbType", "zbPage"].includes(fn)) assert.strictEqual(g, true, `${tool}/${fn}`);
+      else assert.strictEqual(g, null, `${tool}/${fn} is not an action`);
+    }
+  }
+});
+
+test("ZB-11: with activity cues off there is no overlay, so nothing is told to check it", async () => {
+  const b = load({ stored: { showActivity: false }, page: { zbClick: { ok: true, tag: "a", text: "" } } });
+  await b.click(1);
+  b.guards.length = 0;
+  assert.ok((await b.call("click", { tabId: 1, selector: "a" })).ok);
+  assert.deepStrictEqual(b.guards, [["zbClick", null]]);
+});
+
+test("ZB-11: an action that finds the overlay covered comes back REFUSED", async () => {
+  const b = load({ page: { zbClick: { ok: false, code: "REFUSED", message: "the page covered zenbridge's activity overlay just before the action" } } });
+  await b.click(1);
+  const r = await b.call("click", { tabId: 1, selector: "a" });
+  assert.strictEqual(r.error.code, "REFUSED");
+  assert.match(r.error.message, /covered/);
+});
+
+test("ZB-11: after waiting for your upload answer, the overlay is cued and checked again before the files go in", async () => {
+  const b = load({ page: uploadPage() });
+  await b.click(1);
+  const id = await readyUpload(b, "a.txt");
+  b.calls.length = 0; b.guards.length = 0;
+  const r = await b.call("file_upload", { tabId: 1, uploads: [id], selector: "input" });
+  assert.ok(r.ok, JSON.stringify(r.error));
+  const order = b.calls.filter((c) => c[0] === "confirm" || c[0] === "exec").map((c) => c[0] === "confirm" ? "confirm" : c[2]);
+  assert.deepStrictEqual(order, ["zbShow", "confirm", "zbShow", "zbPage"]);
+  assert.deepStrictEqual(b.guards.at(-1), ["zbPage", true]);
+});
+
+// ---------------------------------------------------------------- ZB-12
+test("ZB-12: go-anywhere, from a public page: LAN addresses, mapped loopback and .local names ask first", async () => {
+  for (const url of ["http://192.168.1.1/", "http://[::ffff:127.0.0.1]:8080/", "http://10.0.0.5:9000/", "http://169.254.169.254/",
+    "http://printer.local/", "http://[fd00::1]/", "http://router/"]) {
+    const b = load({ page: readable, goAnywhere: true, confirm: "deny" });
+    await startSession(b);
+    await b.click(3);
+    await b.call("read_page", { tabId: 3 });
+    const r = await b.call("tab_open", { url });
+    assert.strictEqual(r.error && r.error.code, "REFUSED", url);
+    assert.strictEqual(b.asked.length, 1, url);
+    assert.strictEqual(b.asked[0].local, true, url);
+  }
+});
+
+test("ZB-12: public names that resolve to a local address (localtest.me, *.nip.io) are local: tab_open and navigate ask", async () => {
+  const dns = { "localtest.me": ["127.0.0.1"], "127.0.0.1.nip.io": ["127.0.0.1"], "wiki.corp.example": ["93.184.216.34", "10.1.2.3"] };
+  for (const url of ["http://localtest.me:8080/", "http://127.0.0.1.nip.io:8080/", "https://wiki.corp.example/"]) {
+    const b = load({ page: readable, goAnywhere: true, confirm: "deny", dns });
+    await startSession(b);
+    await b.click(3);
+    await b.call("read_page", { tabId: 3 });
+    const r = await b.call("tab_open", { url });
+    assert.strictEqual(r.error && r.error.code, "REFUSED", url);
+    assert.ok(b.calls.some((c) => c[0] === "dns" && c[1] === new URL(url).hostname), "looked up");
+    assert.ok(!b.calls.some((c) => c[0] === "create"), "not opened");
+    const n = await b.call("navigate", { tabId: 3, url });
+    assert.strictEqual(n.error && n.error.code, "REFUSED", `navigate ${url}`);
+    assert.strictEqual(b.tabs[3].url, "https://github.com/x");
+  }
+  const pub = load({ page: readable, goAnywhere: true, confirm: "deny", dns });
+  await startSession(pub);
+  await pub.click(3);
+  await pub.call("read_page", { tabId: 3 });
+  assert.ok((await pub.call("tab_open", { url: "https://example.org/" })).ok, "a public answer: no question");
+  assert.strictEqual(pub.asked.length, 0);
+});
+
+test("ZB-12: a failed DNS lookup doesn't break anything (the address check still guards the load)", async () => {
+  const b = load({ page: readable, goAnywhere: true, confirm: "deny", dns: { "nx.example": "fail" } });
+  await startSession(b);
+  await b.click(3);
+  await b.call("read_page", { tabId: 3 });
+  assert.ok((await b.call("tab_open", { url: "https://nx.example/" })).ok);
+});
+
+test("ZB-12: DNS rebinding: a public-looking site reached at a local address is cancelled, then needs your OK", async () => {
+  const b = load({ page: readable, goAnywhere: true, confirm: "deny" });
+  await startSession(b);
+  await b.click(3);
+  await b.call("read_page", { tabId: 3 });
+  b.tabs[3].url = "https://rebind.example/";  // the tab now shows the attacker's page (resolved publicly at first)
+  armedScopeAdd(b, 3, "https://rebind.example");
+  const sub = (o) => plain(b.on.headers({ tabId: 3, type: "xmlhttprequest", url: "https://rebind.example/api", documentUrl: "https://rebind.example/", ...o }));
+  assert.deepStrictEqual(sub({ ip: "93.184.216.34" }), {}, "a public address: untouched");
+  assert.deepStrictEqual(sub({ ip: "127.0.0.1" }), { cancel: true }, "rebound to loopback: cancelled");
+  assert.deepStrictEqual(sub({ ip: "::ffff:192.168.0.10" }), { cancel: true });
+  assert.deepStrictEqual(plain(b.on.headers({ tabId: 2, type: "main_frame", url: "https://rebind.example/", ip: "127.0.0.1" })), {}, "not an armed tab");
+  const r = await b.call("read_page", { tabId: 3 });
+  assert.strictEqual(r.error.code, "REFUSED", "the next tool call on it is a crossing");
+  assert.strictEqual(b.asked.at(-1).origin, "https://rebind.example");
+  assert.strictEqual(b.asked.at(-1).local, true);
+});
+
+test("ZB-12: once you allow the site as a local one, its local responses go through", async () => {
+  const b = load({ page: readable, goAnywhere: true, confirm: "allow" });
+  await startSession(b);
+  await b.click(3);
+  await b.call("read_page", { tabId: 3 });
+  b.tabs[3].url = "https://home.example/";
+  armedScopeAdd(b, 3, "https://home.example");
+  const main = () => plain(b.on.headers({ tabId: 3, type: "main_frame", url: "https://home.example/", ip: "10.0.0.2" }));
+  assert.deepStrictEqual(main(), { cancel: true });
+  assert.ok((await b.call("read_page", { tabId: 3 })).ok, "you allowed it");
+  assert.deepStrictEqual(main(), {}, "allowed as local: loads");
+  b.on.responseStarted({ tabId: 3, type: "main_frame", url: "https://other.example/", ip: "127.0.0.1" });
+  assert.strictEqual(vm.runInContext("localByAddress.has('https://other.example')", b.ctx), true, "onResponseStarted marks it too");
+});
+
+test("ZB-12: a local page using its own local services is not a crossing", async () => {
+  const b = load({ page: readable });
+  await b.click(1);
+  assert.deepStrictEqual(plain(b.on.headers({ tabId: 1, type: "xmlhttprequest", url: "http://localhost:3000/api", documentUrl: "http://localhost:3000/app", ip: "127.0.0.1" })), {});
+});
+function armedScopeAdd(b, tabId, origin) { vm.runInContext(`armed.get(${tabId}).add(${JSON.stringify(origin)})`, b.ctx); }
+
+// ---------------------------------------------------------------- ZB-14: action cap (R-041)
+test("ZB-14: more than 600 tool calls in 10 minutes pauses Claude until you click the button", async () => {
+  const b = load({ page: readable });
+  await b.click(1);
+  const cap = vm.runInContext("ZB_SCHEMA.limits.actionCap", b.ctx);
+  assert.strictEqual(cap, 600);
+  assert.strictEqual(vm.runInContext("ZB_SCHEMA.limits.actionCapWindowSeconds", b.ctx), 600);
+  for (let i = 1; i < cap; i++) assert.ok((await b.call("tabs_list", {})).ok);  // the click above was not a tool call
+  assert.ok((await b.call("read_page", { tabId: 1 })).ok, "call number 600 still runs");
+  const tripped = await b.call("read_page", { tabId: 1 });
+  assert.strictEqual(tripped.error.code, "PAUSED");
+  assert.match(tripped.error.message, /just reached .*600 tool calls in 10 minutes/);
+  assert.ok(b.calls.some((c) => c[0] === "badge" && c[2] === "II"), "the badge says paused");
+  const execs = b.calls.filter((c) => c[0] === "exec").length;
+  const still = await b.call("click", { tabId: 1, selector: "a" });
+  assert.strictEqual(still.error.code, "PAUSED");
+  assert.match(still.error.message, /click the zenbridge toolbar button/);
+  assert.strictEqual(b.calls.filter((c) => c[0] === "exec").length, execs, "nothing reaches the page while paused");
+  assert.strictEqual(b.armed().size, 1, "the click to resume is not a disarm");
+  await b.click(1);
+  assert.strictEqual(b.armed().size, 1, "clicking only lets Claude continue");
+  assert.ok((await b.call("read_page", { tabId: 1 })).ok, "and the count starts over");
+});
+
+test("ZB-14: the cap counts calls inside the window only, and upload pieces don't count", async () => {
+  const b = load({ page: readable });
+  await b.click(1);
+  vm.runInContext("callTimes = Array(600).fill(Date.now() - 601000)", b.ctx);  // 600 calls, just over 10 minutes ago
+  assert.ok((await b.call("tabs_list", {})).ok);
+  for (let i = 0; i < 700; i++) {
+    const r = await b.call("upload_chunk", { uploadId: "d".repeat(32), index: 0, total: 1, name: "a", folder: "~/Downloads", mimeType: "a/b", data: "QUJD" });
+    assert.ok(r.ok);
+  }
+  assert.strictEqual(vm.runInContext("callTimes.length", b.ctx), 1);
+});
+
+test("ZB-14: turning Claude off clears a pause", async () => {
+  const b = load({ page: readable });
+  await b.click(1);
+  vm.runInContext("setPaused(true)", b.ctx);
+  assert.strictEqual((await b.call("tabs_list", {})).error.code, "PAUSED");
+  b.on.command("disarm-all");
+  assert.strictEqual(vm.runInContext("paused", b.ctx), false);
+  assert.ok((await b.call("tabs_list", {})).ok);
+});
+
+test("ZB-14: the folder goes to the prompt only, never into the page", async () => {
+  const b = load({ page: uploadPage() });
+  await b.click(1);
+  const id = await readyUpload(b, "x.pdf");
+  assert.ok((await b.call("file_upload", { tabId: 1, uploads: [id], selector: "input" })).ok);
+  assert.deepStrictEqual(b.asked.at(-1).files, [{ name: "x.pdf", folder: "~/Downloads", bytes: 4 }]);
+  const sent = b.calls.filter((c) => c[0] === "exec" && c[4].op === "upload").at(-1)[4];
+  assert.deepStrictEqual(Object.keys(sent.files[0]).sort(), ["data", "mimeType", "name"]);
 });

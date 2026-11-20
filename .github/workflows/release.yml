@@ -21,6 +21,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     # Optional AMO_API_KEY / AMO_API_SECRET live in this environment, which only v* tags can use.
+    # Supply chain (ZB-13): every action is pinned to a full commit SHA (Dependabot proposes updates), and
+    # web-ext is the exact version in package-lock.json, installed with npm ci and no install scripts.
     environment:
       name: release
       url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
@@ -29,10 +31,15 @@ jobs:
     outputs:
       signed: ${{ steps.build.outputs.signed }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "22"
+
+      - name: Install the pinned web-ext (package-lock.json)
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Check version and changelog
         id: version
@@ -61,13 +68,13 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           if [ -n "$WEB_EXT_API_KEY" ] && [ -n "$WEB_EXT_API_SECRET" ]; then
-            npx --yes web-ext@8 sign --channel=unlisted --source-dir extension --artifacts-dir dist
+            ./node_modules/.bin/web-ext sign --channel=unlisted --source-dir extension --artifacts-dir dist
             mv "$(ls dist/*.xpi)" "dist/zenbridge-$VERSION.xpi"
             echo "file=dist/zenbridge-$VERSION.xpi" >> "$GITHUB_OUTPUT"
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
             # No AMO keys: publish the unsigned package (upload it to addons.mozilla.org to get it signed).
-            npx --yes web-ext@8 build --source-dir extension --artifacts-dir dist
+            ./node_modules/.bin/web-ext build --source-dir extension --artifacts-dir dist
             mv "$(ls dist/*.zip)" "dist/zenbridge-$VERSION-unsigned.xpi"
             echo "file=dist/zenbridge-$VERSION-unsigned.xpi" >> "$GITHUB_OUTPUT"
             echo "signed=false" >> "$GITHUB_OUTPUT"
@@ -81,7 +88,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "${{ steps.build.outputs.file }}" \
             --title "zenbridge ${{ steps.version.outputs.version }}" --notes-file notes.md --verify-tag
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: xpi
           path: ${{ steps.build.outputs.file }}
@@ -98,8 +105,10 @@ jobs:
       pages: write
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: xpi
           path: dist
@@ -112,7 +121,7 @@ jobs:
           # Stable name for the install button, plus the versioned file.
           cp "dist/zenbridge-$version.xpi" _site/zenbridge.xpi
           cp "dist/zenbridge-$version.xpi" _site/
-      - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
       - id: deploy
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1

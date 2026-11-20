@@ -133,19 +133,81 @@ function zbOpenAllowed(origin, openable, scopes) {
 }
 
 // Local addresses: the allowlist, plus names that always mean this computer.
+// ZB-12: is this IP address (v4 or v6, brackets optional) loopback, private, link-local, shared (CGNAT),
+// unspecified or otherwise not on the public internet? IPv6 forms that carry an IPv4 address (mapped,
+// compatible, NAT64) are judged by that address. Anything that doesn't parse is not an address: false.
+function zbIsLocalAddress(ip) {
+  let s = String(ip || "").trim().toLowerCase();
+  if (s.startsWith("[") && s.endsWith("]")) s = s.slice(1, -1);
+  const pct = s.indexOf("%");  // zone id (fe80::1%en0)
+  if (pct >= 0) s = s.slice(0, pct);
+  const v4 = (t) => {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(t);
+    if (!m) return null;
+    const b = m.slice(1).map(Number);
+    return b.every((x) => x <= 255) ? b : null;
+  };
+  const local4 = ([a, b]) => a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+  const four = v4(s);
+  if (four) return local4(four);
+  if (!/^[0-9a-f:.]+$/.test(s) || !s.includes(":")) return false;
+  // Expand to 8 groups of 16 bits.
+  let tail = [];
+  const lastColon = s.lastIndexOf(":");
+  const dotted = v4(s.slice(lastColon + 1));
+  if (dotted) { tail = [dotted[0] * 256 + dotted[1], dotted[2] * 256 + dotted[3]]; s = s.slice(0, lastColon + 1) + "0:0"; }
+  const halves = s.split("::");
+  if (halves.length > 2) return false;
+  const part = (x) => (x ? x.split(":") : []);
+  const head = part(halves[0]), rest = halves.length === 2 ? part(halves[1]) : [];
+  if (halves.length === 1 && head.length !== 8) return false;
+  const fill = 8 - head.length - rest.length;
+  if (fill < 0 || (halves.length === 2 && fill < 1 && head.length + rest.length === 8)) return false;
+  const groups = [...head, ...Array(halves.length === 2 ? fill : 0).fill("0"), ...rest];
+  if (groups.length !== 8 || groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return false;
+  const g = groups.map((x) => parseInt(x, 16));
+  if (tail.length) { g[6] = tail[0]; g[7] = tail[1]; }
+  const zero = (from, to) => g.slice(from, to).every((x) => x === 0);
+  const embedded = [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255];
+  if (zero(0, 8)) return true;                                     // ::
+  if (zero(0, 7) && g[7] === 1) return true;                       // ::1
+  if (zero(0, 5) && g[5] === 0xffff) return local4(embedded);      // ::ffff:a.b.c.d (mapped)
+  if (zero(0, 6)) return local4(embedded);                         // ::a.b.c.d (compatible, deprecated)
+  if (g[0] === 0x64 && g[1] === 0xff9b && zero(2, 6)) return local4(embedded);  // 64:ff9b::/96 (NAT64)
+  if ((g[0] & 0xfe00) === 0xfc00) return true;                     // fc00::/7 unique local
+  if ((g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0) return true;  // fe80::/10 link-local, fec0::/10 site-local
+  if ((g[0] & 0xff00) === 0xff00) return true;                     // multicast
+  return false;
+}
+
+// Names that only mean something on your own machine or network.
+const ZB_LOCAL_SUFFIXES = [".localhost", ".local", ".internal", ".lan", ".home.arpa", ".home", ".corp", ".intranet", ".private"];
+
+// Local = in your allowlist, or a local name or address (by its text: zbIsLocalAddress for IP literals, the
+// suffixes above, and single-label names like http://router/). Names that look public but point at a local
+// address are caught by DNS (background.js, before tab_open and navigate) and by the address each request
+// actually connected to (onHeadersReceived), which also stops DNS rebinding.
 function zbIsLocal(origin, allowlist) {
   if (!origin) return false;
   if (zbInScope(allowlist, origin)) return true;
-  const h = new URL(origin).hostname;
-  return h === "localhost" || h.endsWith(".localhost") || /^127\.\d+\.\d+\.\d+$/.test(h) || h === "[::1]" || h === "0.0.0.0";
+  let h;
+  try { h = new URL(origin).hostname.toLowerCase(); } catch (e) { return false; }
+  if (h.endsWith(".")) h = h.slice(0, -1);
+  if (h === "localhost" || ZB_LOCAL_SUFFIXES.some((x) => h.endsWith(x))) return true;
+  if (h.startsWith("[") || /^[\d.]+$/.test(h)) return zbIsLocalAddress(h);
+  return !h.includes(".");
 }
 
 // Moving Claude between public sites and local addresses is your decision, not the model's (ZB-8).
 // state: touched = the kinds of site ("local"/"public") Claude has seen this session; handArmedLocal = you armed
-// a local tab by hand; approved = origins you already allowed. A local origin needs your OK once Claude has
+// a local tab by hand; approved = origins you already allowed (zbCrossingKey). A local origin needs your OK once Claude has
 // seen a public site, or if you never armed a local tab yourself; a public one, once Claude has seen a local one.
+// An approval covers the origin as the kind of site it was when you allowed it: if a public name later turns
+// out to point at a local address (DNS rebinding), that is a new crossing.
+const zbCrossingKey = (origin, isLocal) => `${isLocal ? "local" : "public"} ${origin}`;
 function zbCrossingNeedsOk(origin, isLocal, state) {
-  if (state.approved.has(origin)) return false;
+  if (state.approved.has(zbCrossingKey(origin, isLocal))) return false;
   return isLocal ? state.touched.has("public") || !state.handArmedLocal : state.touched.has("local");
 }
 
@@ -155,6 +217,14 @@ function zbSettingsDiff(s, defaults, tunable) {
   const out = {};
   for (const k of tunable) if (Object.hasOwn(s, k) && JSON.stringify(s[k]) !== JSON.stringify(defaults[k])) out[k] = s[k];
   return out;
+}
+
+// ZB-14 / R-041: a per-session cap on tool calls. times = when recent calls were made (oldest first); returns
+// the times still inside the window plus this call, and whether that is more than the cap.
+function zbRateCap(times, now, cap, windowMs) {
+  const kept = times.filter((t) => now - t < windowMs && t <= now);
+  kept.push(now);
+  return { times: kept, over: kept.length > cap };
 }
 
 // "1.5.1" < "1.5.2". Missing or non-numeric parts count as 0.
@@ -198,5 +268,5 @@ function zbRedactUrl(url) {
 if (typeof module !== "undefined") {
   module.exports = { zbOriginOf, zbArmable, zbEntryMatches, zbInScope, zbHostPattern, zbGlobMatch,
     zbArmDecision, zbBadge, zbIsSensitiveField, zbOpenAllowed, zbNewScope, zbCssProblem, zbSanitizeSettings, zbRedactUrl, zbSecretValue,
-    zbIsLocal, zbCrossingNeedsOk, zbSettingsDiff, zbVersionLess };
+    zbIsLocal, zbIsLocalAddress, zbCrossingKey, zbCrossingNeedsOk, zbSettingsDiff, zbVersionLess, zbRateCap };
 }

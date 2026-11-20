@@ -254,9 +254,34 @@ test("zbIsLocal: the allowlist plus names that always mean this computer (ZB-8)"
   const allow = ZB_CONFIG.allowlist;
   for (const o of ["http://localhost:5173", "http://127.0.0.1:8000", "http://[::1]:3000", "https://localhost", "http://app.localhost:3000",
     "http://127.1.2.3", "http://0.0.0.0:8080"]) assert.ok(L.zbIsLocal(o, allow), o);
-  for (const o of ["https://github.com", "http://localhost.evil.example", "http://127.0.0.1.evil.example", "http://192.168.1.5", null])
+  for (const o of ["https://github.com", "http://localhost.evil.example", "http://127.0.0.1.evil.example", null])
     assert.ok(!L.zbIsLocal(o, allow), String(o));
-  assert.ok(L.zbIsLocal("http://192.168.1.5:8000", [...allow, "http://192.168.1.5:*"]), "anything you add to the allowlist");
+  assert.ok(L.zbIsLocal("http://203.0.113.5:8000", [...allow, "http://203.0.113.5:*"]), "anything you add to the allowlist");
+});
+
+test("ZB-12: zbIsLocalAddress knows every loopback, private, link-local and shared range, in v4 and v6", () => {
+  const local = ["127.0.0.1", "127.255.255.254", "10.0.0.5", "172.16.0.1", "172.31.255.255", "192.168.1.1", "100.64.0.1",
+    "100.127.255.255", "169.254.169.254", "0.0.0.0", "0.1.2.3", "198.18.0.1", "224.0.0.1", "255.255.255.255",
+    "::1", "[::1]", "::", "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1", "[::ffff:7f00:1]", "::ffff:192.168.0.1", "::ffff:a9fe:a9fe",
+    "::127.0.0.1", "64:ff9b::7f00:1", "64:ff9b::10.1.2.3", "fc00::1", "fd12:3456::1", "fe80::1", "fe80::1%en0", "febf::1",
+    "fec0::1", "ff02::1", "FD00::1"];
+  const pub = ["8.8.8.8", "1.1.1.1", "172.15.255.255", "172.32.0.1", "100.63.255.255", "100.128.0.1", "169.253.0.1", "192.167.1.1",
+    "11.0.0.1", "2606:4700::1111", "2001:4860:4860::8888", "::ffff:8.8.8.8", "64:ff9b::808:808", "fbff::1", "fec0", "",
+    null, "256.1.1.1", "1.2.3", "::1::2", "1:2:3:4:5:6:7:8:9", "localhost", "g::1"];
+  for (const a of local) assert.strictEqual(L.zbIsLocalAddress(a), true, a);
+  for (const a of pub) assert.strictEqual(L.zbIsLocalAddress(a), false, String(a));
+});
+
+test("ZB-12: zbIsLocal by the URL's own host: private ranges, mapped and odd spellings, local suffixes, single labels", () => {
+  const local = ["http://[::ffff:127.0.0.1]:8080", "http://192.168.1.1", "http://10.0.0.5:9000", "http://172.20.1.1",
+    "http://100.100.100.100", "http://169.254.169.254", "http://printer.local", "http://nas.lan", "http://box.home.arpa",
+    "http://metadata.google.internal", "http://[fd00::1]", "http://[fe80::1]", "http://0x7f.1:8080", "http://2130706433:8080",
+    "http://[0:0:0:0:0:0:0:1]:8080", "http://017700000001", "http://router", "http://nas:5000", "http://LOCALHOST.",
+    "http://printer.local.", "http://[64:ff9b::7f00:1]"];
+  const pub = ["https://example.com", "https://8.8.8.8", "http://[2606:4700::1111]", "http://local.example.com",
+    "http://localtest.me:8080", "http://127.0.0.1.nip.io:8080", "http://internal.example", "http://lan.example.org"];
+  for (const o of local) assert.strictEqual(L.zbIsLocal(o, []), true, o);
+  for (const o of pub) assert.strictEqual(L.zbIsLocal(o, []), false, `${o} (public by name; DNS and the connected address decide)`);
 });
 
 test("zbCrossingNeedsOk: public <-> local moves need your OK (ZB-8)", () => {
@@ -266,11 +291,12 @@ test("zbCrossingNeedsOk: public <-> local moves need your OK (ZB-8)", () => {
   assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st([], true)), false, "you armed one by hand");
   assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st(["local"], true)), false);
   assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st(["public"], true)), true, "tainted by a public page");
-  assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st(["public"], true, [L1])), false, "you already allowed it");
+  assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st(["public"], true, [L.zbCrossingKey(L1, true)])), false, "you already allowed it");
+  assert.strictEqual(L.zbCrossingNeedsOk(L1, true, st(["public"], true, [L.zbCrossingKey(L1, false)])), true, "allowed as a public site only");
   assert.strictEqual(L.zbCrossingNeedsOk(P, false, st([])), false);
   assert.strictEqual(L.zbCrossingNeedsOk(P, false, st(["public"])), false);
   assert.strictEqual(L.zbCrossingNeedsOk(P, false, st(["local"], true)), true, "the other direction");
-  assert.strictEqual(L.zbCrossingNeedsOk(P, false, st(["local"], true, [P])), false);
+  assert.strictEqual(L.zbCrossingNeedsOk(P, false, st(["local"], true, [L.zbCrossingKey(P, false)])), false);
 });
 
 test("zbSettingsDiff: only settings that differ from the defaults are saved (ZB-9)", () => {
@@ -290,4 +316,12 @@ test("zbVersionLess", () => {
   assert.ok(!L.zbVersionLess("1.10.0", "1.5.2"));
   assert.ok(L.zbVersionLess(undefined, "1.5.2"));
   assert.ok(L.zbVersionLess("1.5", "1.5.2"));
+});
+
+test("ZB-14: zbRateCap", () => {
+  let t = [];
+  for (let i = 0; i < 3; i++) { const r = L.zbRateCap(t, 1000 + i, 3, 100); t = r.times; assert.strictEqual(r.over, false); }
+  assert.strictEqual(L.zbRateCap(t, 1050, 3, 100).over, true);
+  assert.strictEqual(L.zbRateCap(t, 1101, 3, 100).over, false, "the oldest fell out of the window");
+  assert.deepStrictEqual(L.zbRateCap([5000], 1000, 3, 100).times, [1000], "times from the future (clock change) are dropped");
 });

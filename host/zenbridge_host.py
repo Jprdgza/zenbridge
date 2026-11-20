@@ -221,7 +221,8 @@ class Host:
         else:
             e = resp["error"]
             # A timed-out action may still have run in the browser; a late reply is logged by id.
-            outcome = "timeout" if e["code"] == "TIMEOUT" else "refused"
+            # PAUSED: the per-session action cap (ZB-14) tripped, or Claude is still paused after it did.
+            outcome = {"TIMEOUT": "timeout", "PAUSED": "paused"}.get(e["code"], "refused")
             self.log.write(req["tool"], req["args"], outcome, tab_url, f"{e['code']}: {e['message']}", **extra)
         return resp
 

@@ -30,53 +30,62 @@ function zbPageMetrics(a, expectedOrigin) {
   };
 }
 
-function zbClick(a, expectedOrigin) {
+function zbClick(a, expectedOrigin, guard) {
   if (location.origin !== expectedOrigin) return { ok: false, code: "OUT_OF_SCOPE", message: "page origin changed" };
-  const byRef = (r) => { const reg = globalThis.__zbRefs, w = reg && reg.map.get(r), e = w && w.deref(); return e && e.isConnected ? e : null; };
-  let el, cx, cy;
-  if (a.selector !== undefined || a.ref !== undefined) {
-    if (a.ref !== undefined) {
-      el = byRef(a.ref);
-      if (!el) return { ok: false, code: "INVALID", message: "ref not found (the page changed?): call read_tree or find again" };
+  // ZB-11: with activity cues on, check the overlay inside this same task, right before acting and right after.
+  const G = guard ? globalThis.__zbOverlay : null;
+  if (guard) {
+    const no = G && G.before ? G.before() : { ok: false, code: "REFUSED", message: "zenbridge's activity overlay is missing from this page, so Claude didn't act" };
+    if (no) return no;
+  }
+  const res = (() => {
+    const byRef = (r) => { const reg = globalThis.__zbRefs, w = reg && reg.map.get(r), e = w && w.deref(); return e && e.isConnected ? e : null; };
+    let el, cx, cy;
+    if (a.selector !== undefined || a.ref !== undefined) {
+      if (a.ref !== undefined) {
+        el = byRef(a.ref);
+        if (!el) return { ok: false, code: "INVALID", message: "ref not found (the page changed?): call read_tree or find again" };
+      } else {
+        try { el = document.querySelector(a.selector); } catch (e) { return { ok: false, code: "INVALID", message: "invalid CSS selector" }; }
+        if (!el) return { ok: false, code: "INVALID", message: "no element matches selector" };
+      }
+      el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      const r = el.getBoundingClientRect();
+      cx = r.left + r.width / 2; cy = r.top + r.height / 2;
     } else {
-      try { el = document.querySelector(a.selector); } catch (e) { return { ok: false, code: "INVALID", message: "invalid CSS selector" }; }
-      if (!el) return { ok: false, code: "INVALID", message: "no element matches selector" };
+      if (a.x > window.innerWidth || a.y > window.innerHeight) return { ok: false, code: "INVALID", message: "point is outside the viewport" };
+      el = document.elementFromPoint(a.x, a.y);
+      if (!el) return { ok: false, code: "INVALID", message: "no element at that point" };
+      cx = a.x; cy = a.y;
     }
-    el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-    const r = el.getBoundingClientRect();
-    cx = r.left + r.width / 2; cy = r.top + r.height / 2;
-  } else {
-    if (a.x > window.innerWidth || a.y > window.innerHeight) return { ok: false, code: "INVALID", message: "point is outside the viewport" };
-    el = document.elementFromPoint(a.x, a.y);
-    if (!el) return { ok: false, code: "INVALID", message: "no element at that point" };
-    cx = a.x; cy = a.y;
-  }
-  const button = a.button === "right" ? 2 : a.button === "middle" ? 1 : 0;
-  const mods = new Set(a.modifiers || []);
-  const base = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, button, view: window,
-    ctrlKey: mods.has("ctrl"), shiftKey: mods.has("shift"), altKey: mods.has("alt"), metaKey: mods.has("meta") };
-  const ptr = { pointerId: 1, pointerType: "mouse", isPrimary: true };
-  const down = button === 2 ? 2 : button === 1 ? 4 : 1;
-  const count = a.clickCount || 1;
-  for (let i = 1; i <= count; i++) {
-    el.dispatchEvent(new PointerEvent("pointerdown", { ...base, ...ptr, buttons: down, detail: i }));
-    el.dispatchEvent(new MouseEvent("mousedown", { ...base, buttons: down, detail: i }));
-    if (i === 1 && button === 0 && typeof el.focus === "function") el.focus({ preventScroll: true });
-    el.dispatchEvent(new PointerEvent("pointerup", { ...base, ...ptr, buttons: 0, detail: i }));
-    el.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0, detail: i }));
-    if (button === 0) el.dispatchEvent(new MouseEvent("click", { ...base, buttons: 0, detail: i }));
-    else el.dispatchEvent(new MouseEvent("auxclick", { ...base, buttons: 0, detail: i }));
-    if (button === 2) el.dispatchEvent(new MouseEvent("contextmenu", { ...base, buttons: 0, detail: i }));
-  }
-  if (button === 0 && count >= 2) el.dispatchEvent(new MouseEvent("dblclick", { ...base, buttons: 0, detail: 2 }));
-  // Double/triple click select text the way a real one would (word selection is approximated by the whole field).
-  if (button === 0 && count >= 2) {
-    if ((el.localName === "input" || el.localName === "textarea") && typeof el.select === "function") el.select();
-    else if (count === 3) window.getSelection().selectAllChildren(el);
-  }
-  // Short label only (aria-label, else innerText): never form values, not a page-text reader.
-  const text = String(el.getAttribute("aria-label") || el.innerText || "").replace(/\s+/g, " ").trim();
-  return { ok: true, tag: String(el.tagName).toLowerCase().slice(0, 40), text: text.slice(0, 80) };
+    const button = a.button === "right" ? 2 : a.button === "middle" ? 1 : 0;
+    const mods = new Set(a.modifiers || []);
+    const base = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, button, view: window,
+      ctrlKey: mods.has("ctrl"), shiftKey: mods.has("shift"), altKey: mods.has("alt"), metaKey: mods.has("meta") };
+    const ptr = { pointerId: 1, pointerType: "mouse", isPrimary: true };
+    const down = button === 2 ? 2 : button === 1 ? 4 : 1;
+    const count = a.clickCount || 1;
+    for (let i = 1; i <= count; i++) {
+      el.dispatchEvent(new PointerEvent("pointerdown", { ...base, ...ptr, buttons: down, detail: i }));
+      el.dispatchEvent(new MouseEvent("mousedown", { ...base, buttons: down, detail: i }));
+      if (i === 1 && button === 0 && typeof el.focus === "function") el.focus({ preventScroll: true });
+      el.dispatchEvent(new PointerEvent("pointerup", { ...base, ...ptr, buttons: 0, detail: i }));
+      el.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0, detail: i }));
+      if (button === 0) el.dispatchEvent(new MouseEvent("click", { ...base, buttons: 0, detail: i }));
+      else el.dispatchEvent(new MouseEvent("auxclick", { ...base, buttons: 0, detail: i }));
+      if (button === 2) el.dispatchEvent(new MouseEvent("contextmenu", { ...base, buttons: 0, detail: i }));
+    }
+    if (button === 0 && count >= 2) el.dispatchEvent(new MouseEvent("dblclick", { ...base, buttons: 0, detail: 2 }));
+    // Double/triple click select text the way a real one would (word selection is approximated by the whole field).
+    if (button === 0 && count >= 2) {
+      if ((el.localName === "input" || el.localName === "textarea") && typeof el.select === "function") el.select();
+      else if (count === 3) window.getSelection().selectAllChildren(el);
+    }
+    // Short label only (aria-label, else innerText): never form values, not a page-text reader.
+    const text = String(el.getAttribute("aria-label") || el.innerText || "").replace(/\s+/g, " ").trim();
+    return { ok: true, tag: String(el.tagName).toLowerCase().slice(0, 40), text: text.slice(0, 80) };
+  })();
+  return guard ? G.after(res) : res;
 }
 
 function zbFieldInfo(a, expectedOrigin) {
@@ -90,69 +99,87 @@ function zbFieldInfo(a, expectedOrigin) {
     nameAndId: `${el.getAttribute("name") || ""} ${el.getAttribute("id") || ""}`.slice(0, 500) };
 }
 
-function zbType(a, expectedOrigin) {
+function zbType(a, expectedOrigin, guard) {
   if (location.origin !== expectedOrigin) return { ok: false, code: "OUT_OF_SCOPE", message: "page origin changed" };
-  const byRef = (r) => { const reg = globalThis.__zbRefs, w = reg && reg.map.get(r), e = w && w.deref(); return e && e.isConnected ? e : null; };
-  let el;
-  try { el = a.ref !== undefined ? byRef(a.ref) : a.selector !== undefined ? document.querySelector(a.selector) : document.activeElement; } catch (e) {
-    return { ok: false, code: "INVALID", message: "invalid CSS selector" };
+  // ZB-11: with activity cues on, check the overlay inside this same task, right before acting and right after.
+  const G = guard ? globalThis.__zbOverlay : null;
+  if (guard) {
+    const no = G && G.before ? G.before() : { ok: false, code: "REFUSED", message: "zenbridge's activity overlay is missing from this page, so Claude didn't act" };
+    if (no) return no;
   }
-  if (a.ref !== undefined && !el) return { ok: false, code: "INVALID", message: "ref not found (the page changed?): call read_tree or find again" };
-  if (!el || el === document.body || el === document.documentElement) return { ok: false, code: "INVALID", message: "no target: give a selector or focus an element first" };
-  const tag = String(el.tagName).toLowerCase();
-  // Same rule as zbIsSensitiveField in logic.js, repeated because injected code cannot import.
-  const acTokens = String(el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/);
-  const nameAndId = `${el.getAttribute("name") || ""} ${el.getAttribute("id") || ""}`;
-  if ((tag === "input" && String(el.type).toLowerCase() === "password") ||
-      acTokens.some((t) => t.startsWith("cc-") || ["current-password", "new-password", "one-time-code"].includes(t)) ||
-      /pass(word|wd|code)|pwd|otp|cvc|cvv|card.?num|api.?key|secret|token|(?:^|[^a-z])ssn(?:[^a-z]|$)|social.?sec/i.test(nameAndId)) {
-    return { ok: false, code: "REFUSED", message: "refusing to type into a password, one-time-code or credit-card field" };
-  }
-  const isField = tag === "input" || tag === "textarea";
-  if (!isField && !el.isContentEditable) return { ok: false, code: "INVALID", message: "target is not editable" };
-  const proto = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
-  const setValue = (v) => {  // native setter + bubbling events: works with React-controlled inputs
-    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, v);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  };
-  if (a.selector !== undefined || a.ref !== undefined) el.scrollIntoView({ block: "center", behavior: "instant" });
-  el.focus();
-  if (a.clear) {
-    if (isField) { el.select(); if (!document.execCommand("delete") || el.value !== "") setValue(""); }
-    else { window.getSelection().selectAllChildren(el); document.execCommand("delete"); }
-  }
-  let method = "none";
-  if (a.text) {
-    const snapshot = () => (isField ? el.value : el.textContent);  // compared only, never returned
-    const before = snapshot();
-    let inserted = false;
-    try { inserted = document.execCommand("insertText", false, a.text); } catch (e) { inserted = false; }
-    if (inserted && snapshot() !== before) method = "insertText";
-    else if (isField) { setValue(el.value + a.text); method = "setter"; }
-    else return { ok: false, code: "INTERNAL", message: "could not insert text into this editor" };
-  }
-  if (a.key) {
-    const opts = { key: a.key, code: a.key, bubbles: true, cancelable: true, composed: true };
-    const go = el.dispatchEvent(new KeyboardEvent("keydown", opts));
-    if (go && a.key === "Backspace") document.execCommand("delete");
-    if (go && a.key === "Enter" && tag === "input" && el.form) el.form.requestSubmit();
-    el.dispatchEvent(new KeyboardEvent("keyup", opts));
-  }
-  return { ok: true, tag: tag.slice(0, 40), typed: a.text.length, method };
+  const res = (() => {
+    const byRef = (r) => { const reg = globalThis.__zbRefs, w = reg && reg.map.get(r), e = w && w.deref(); return e && e.isConnected ? e : null; };
+    let el;
+    try { el = a.ref !== undefined ? byRef(a.ref) : a.selector !== undefined ? document.querySelector(a.selector) : document.activeElement; } catch (e) {
+      return { ok: false, code: "INVALID", message: "invalid CSS selector" };
+    }
+    if (a.ref !== undefined && !el) return { ok: false, code: "INVALID", message: "ref not found (the page changed?): call read_tree or find again" };
+    if (!el || el === document.body || el === document.documentElement) return { ok: false, code: "INVALID", message: "no target: give a selector or focus an element first" };
+    const tag = String(el.tagName).toLowerCase();
+    // Same rule as zbIsSensitiveField in logic.js, repeated because injected code cannot import.
+    const acTokens = String(el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/);
+    const nameAndId = `${el.getAttribute("name") || ""} ${el.getAttribute("id") || ""}`;
+    if ((tag === "input" && String(el.type).toLowerCase() === "password") ||
+        acTokens.some((t) => t.startsWith("cc-") || ["current-password", "new-password", "one-time-code"].includes(t)) ||
+        /pass(word|wd|code)|pwd|otp|cvc|cvv|card.?num|api.?key|secret|token|(?:^|[^a-z])ssn(?:[^a-z]|$)|social.?sec/i.test(nameAndId)) {
+      return { ok: false, code: "REFUSED", message: "refusing to type into a password, one-time-code or credit-card field" };
+    }
+    const isField = tag === "input" || tag === "textarea";
+    if (!isField && !el.isContentEditable) return { ok: false, code: "INVALID", message: "target is not editable" };
+    const proto = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+    const setValue = (v) => {  // native setter + bubbling events: works with React-controlled inputs
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, v);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    if (a.selector !== undefined || a.ref !== undefined) el.scrollIntoView({ block: "center", behavior: "instant" });
+    el.focus();
+    if (a.clear) {
+      if (isField) { el.select(); if (!document.execCommand("delete") || el.value !== "") setValue(""); }
+      else { window.getSelection().selectAllChildren(el); document.execCommand("delete"); }
+    }
+    let method = "none";
+    if (a.text) {
+      const snapshot = () => (isField ? el.value : el.textContent);  // compared only, never returned
+      const before = snapshot();
+      let inserted = false;
+      try { inserted = document.execCommand("insertText", false, a.text); } catch (e) { inserted = false; }
+      if (inserted && snapshot() !== before) method = "insertText";
+      else if (isField) { setValue(el.value + a.text); method = "setter"; }
+      else return { ok: false, code: "INTERNAL", message: "could not insert text into this editor" };
+    }
+    if (a.key) {
+      const opts = { key: a.key, code: a.key, bubbles: true, cancelable: true, composed: true };
+      const go = el.dispatchEvent(new KeyboardEvent("keydown", opts));
+      if (go && a.key === "Backspace") document.execCommand("delete");
+      if (go && a.key === "Enter" && tag === "input" && el.form) el.form.requestSubmit();
+      el.dispatchEvent(new KeyboardEvent("keyup", opts));
+    }
+    return { ok: true, tag: tag.slice(0, 40), typed: a.text.length, method };
+  })();
+  return guard ? G.after(res) : res;
 }
 
-function zbReadText(a, expectedOrigin) {
+function zbReadText(a, expectedOrigin, guard) {
   if (location.origin !== expectedOrigin) return { ok: false, code: "OUT_OF_SCOPE", message: "page origin changed" };
-  // innerText: visible text only. Input/textarea current values are not part of it.
-  const raw = String(document.body ? document.body.innerText : "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-  const links = [];
-  for (const el of document.querySelectorAll("a[href]")) {
-    if (links.length >= 100) break;
-    const text = String(el.innerText || el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
-    if (text && /^https?:/.test(el.href)) links.push({ text: text.slice(0, 120), href: String(el.href).slice(0, 2048) });
+  // ZB-11: with activity cues on, check the overlay inside this same task, right before acting and right after.
+  const G = guard ? globalThis.__zbOverlay : null;
+  if (guard) {
+    const no = G && G.before ? G.before() : { ok: false, code: "REFUSED", message: "zenbridge's activity overlay is missing from this page, so Claude didn't act" };
+    if (no) return no;
   }
-  return { ok: true, title: String(document.title), text: raw.slice(0, a.maxChars), truncated: raw.length > a.maxChars, links };
+  const res = (() => {
+    // innerText: visible text only. Input/textarea current values are not part of it.
+    const raw = String(document.body ? document.body.innerText : "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    const links = [];
+    for (const el of document.querySelectorAll("a[href]")) {
+      if (links.length >= 100) break;
+      const text = String(el.innerText || el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+      if (text && /^https?:/.test(el.href)) links.push({ text: text.slice(0, 120), href: String(el.href).slice(0, 2048) });
+    }
+    return { ok: true, title: String(document.title), text: raw.slice(0, a.maxChars), truncated: raw.length > a.maxChars, links };
+  })();
+  return guard ? G.after(res) : res;
 }
 
 // Visual activity cue (Catppuccin Mocha mauve): a glow around the viewport, a "Claude is working"
@@ -163,6 +190,11 @@ function zbReadText(a, expectedOrigin) {
 // layer, re-shown on top before every action; its inline styles are !important and re-applied when the page
 // touches them; it is put back when removed. Returns visible:false if it still isn't on top and showing, and
 // the background then refuses the action.
+// ZB-11: the page gets control again after this check, so it is not the last word. While the overlay is
+// active, page popovers and modal dialogs that open (beforetoggle/toggle in the capture phase, and the
+// `open` attribute of <dialog>) push it back on top and count as fights. And the same check runs again
+// inside each action's own injected function, right before it acts (o.before) and right after (o.after),
+// in one synchronous task, so no page code runs between the last check and the action.
 function zbShow(a, expectedOrigin) {
   if (location.origin !== expectedOrigin) return { ok: false, code: "OUT_OF_SCOPE", message: "page origin changed" };
   const ACCENT = "#cba6f7", CRUST = "#11111b", RGB = "203,166,247";  // Catppuccin Mocha mauve / crust
@@ -191,7 +223,8 @@ function zbShow(a, expectedOrigin) {
     o.obs.observe(de, { childList: true });
     o.obs.observe(o.host, { attributes: true });
   };
-  if (!o || !o.obs) {
+  if (!o || o.v !== 2) {
+    if (o && o.obs) { o.obs.disconnect(); if (o.watch) o.watch.disconnect(); }
     const stale = document.getElementById("zenbridge-overlay");
     if (stale) stale.remove();
     const host = document.createElement("div");
@@ -221,17 +254,80 @@ function zbShow(a, expectedOrigin) {
     for (const [k, v] of [["d", "M3 2l7 19 2.6-7.4L20 11z"], ["fill", ACCENT], ["stroke", CRUST], ["stroke-width", "1.5"], ["stroke-linejoin", "round"]]) path.setAttribute(k, v);
     svg.appendChild(path);
     cursor.appendChild(svg);
-    o = globalThis.__zbOverlay = { host, root, glow, pill, box, cursor, timer: 0, hidden: false, fights: [], tampered: false };
-    // Put it back whenever the page removes or restyles it. A page that keeps undoing it (more than 20 times in
-    // 2 s) is marked tampered instead of fighting forever, and every later action on it is refused.
-    o.obs = new MutationObserver(() => {
+    o = globalThis.__zbOverlay = { v: 2, host, root, glow, pill, box, cursor, timer: 0, hidden: false, active: false,
+      fights: [], tampered: false };
+    // A page that keeps undoing it (more than 20 times in 2 s) is marked tampered instead of fighting forever,
+    // and every later action on it is refused.
+    o.fight = () => {
       const now = Date.now();
       o.fights = o.fights.filter((t) => now - t < 2000).concat(now);
-      if (o.fights.length > 20) { o.tampered = true; o.obs.disconnect(); return; }
-      apply();
+      if (o.fights.length > 20) { o.tampered = true; o.obs.disconnect(); }
+      return !o.tampered;
+    };
+    // Put it back whenever the page removes or restyles it.
+    o.obs = new MutationObserver(() => { if (o.fight()) apply(); });
+    // While Claude is acting, a page popover or modal dialog opening goes above it: put it back on top right
+    // after (a microtask, once the page's own call has returned), and count it as a fight.
+    const reshow = () => queueMicrotask(() => { if (o.active && !o.hidden && o.fight()) apply(); });
+    const onToggle = (e) => {
+      if (!o.active || o.hidden || e.target === o.host || (e.newState && e.newState !== "open")) return;
+      reshow();
+    };
+    for (const t of ["beforetoggle", "toggle"]) document.addEventListener(t, onToggle, true);
+    o.watch = new MutationObserver((recs) => {
+      if (o.active && !o.hidden && recs.some((r) => r.target.localName === "dialog" && r.target.hasAttribute("open"))) reshow();
     });
+    o.watch.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["open"] });
+    // Why it isn't showing on top right now, or "" if it is: in the top layer, rendered (checkVisibility), and
+    // the topmost thing at the centre and near each corner (the glow takes hits only for this synchronous check).
+    // While a modal <dialog> is open everything outside it is inert, so hit testing can't see the overlay; it is
+    // re-opened after any dialog, so it is above it in the top layer anyway.
+    o.covered = () => {
+      let why = o.tampered ? "the page keeps undoing it" : !o.host.isConnected ? "it was removed"
+        : !o.host.matches(":popover-open") ? "it is not in the top layer"
+          : !o.host.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true }) ? "it is not rendered" : "";
+      let modal = null;
+      try { modal = document.querySelector(":modal"); } catch (e) { modal = null; }
+      if (!why && !modal) {
+        const w = document.documentElement.clientWidth || window.innerWidth, h = document.documentElement.clientHeight || window.innerHeight;
+        o.glow.style.setProperty("pointer-events", "auto");
+        try {
+          // 24 px in from the edges: macOS overlay scrollbars sit above the top layer and take hits there.
+          const e = 24;
+          for (const [px, py] of [[w / 2, h / 2], [w / 2, e], [e, e], [w - e, e], [e, h - e], [w - e, h - e]]) {
+            const hit = document.elementFromPoint(px, py);
+            if (hit !== o.host) { why = `a ${hit ? String(hit.tagName).toLowerCase().slice(0, 20) : "nothing"} element is on top of it at ${Math.round(px)},${Math.round(py)}`; break; }
+          }
+        } finally { o.glow.style.setProperty("pointer-events", "none"); }
+      }
+      return why;
+    };
+    const refuse = (message) => ({ ok: false, code: "REFUSED", message });
+    // Called first thing inside an action's injected function. Strict: the cue put it on top moments ago, so
+    // anything above it now was put there by the page during the pause. Put it back, count it, and don't act.
+    o.before = () => {
+      const why = o.hidden ? "it is hidden" : o.covered();
+      if (!why) return null;
+      if (!o.tampered && !o.hidden && o.fight()) apply();
+      return refuse(`the page covered zenbridge's activity overlay just before the action (${why}), so Claude didn't act`);
+    };
+    // Called with the action's result, in the same task. The action itself may open a page popover or dialog
+    // (a menu, say): put the overlay back on top once. If it still isn't showing, report REFUSED and refuse
+    // every later action on this page.
+    o.after = (res) => {
+      const finish = (r) => {
+        let why = o.covered();
+        if (why && !o.tampered && o.fight()) { apply(); why = o.covered(); }
+        if (!why) return r;
+        o.tampered = true;
+        return refuse(`the page covered zenbridge's activity overlay during the action (${why}); the action may have run, `
+          + "and Claude won't act on this page again");
+      };
+      return res && typeof res.then === "function" ? res.then(finish) : finish(res);
+    };
   }
   o.hidden = !!a.hide;
+  o.active = !o.hidden;
   apply();
   if (a.hide) return { ok: true, visible: false };
   const show = (el, on) => el.style.setProperty("opacity", on ? "1" : "0");
@@ -277,76 +373,70 @@ function zbShow(a, expectedOrigin) {
     }
   }
   clearTimeout(o.timer);
-  o.timer = setTimeout(() => { for (const e of [o.glow, o.pill, o.box, o.cursor]) show(e, false); }, 5000);
-  // Is it really showing? In the top layer, rendered (checkVisibility), and the topmost thing at the centre
-  // and near each corner (the glow takes hits for this one synchronous check, so the page can't react in between).
-  // While a modal <dialog> is open everything outside it is inert, so hit testing can't see the overlay; it was
-  // just re-opened after that dialog, so it is above it in the top layer anyway.
-  let why = o.tampered ? "the page keeps undoing it" : !o.host.isConnected ? "it was removed"
-    : !o.host.matches(":popover-open") ? "it is not in the top layer"
-      : !o.host.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true }) ? "it is not rendered" : "";
-  let modal = null;
-  try { modal = document.querySelector(":modal"); } catch (e) { modal = null; }
-  if (!why && !modal) {
-    const w = document.documentElement.clientWidth || window.innerWidth, h = document.documentElement.clientHeight || window.innerHeight;
-    o.glow.style.setProperty("pointer-events", "auto");
-    try {
-      // 24 px in from the edges: macOS overlay scrollbars sit above the top layer and take hits there.
-      const e = 24;
-      for (const [px, py] of [[w / 2, h / 2], [w / 2, e], [e, e], [w - e, e], [e, h - e], [w - e, h - e]]) {
-        const hit = document.elementFromPoint(px, py);
-        if (hit !== o.host) { why = `a ${hit ? String(hit.tagName).toLowerCase().slice(0, 20) : "nothing"} element is on top of it at ${Math.round(px)},${Math.round(py)}`; break; }
-      }
-    } finally { o.glow.style.setProperty("pointer-events", "none"); }
-  }
-  const visible = !why;
-  return { ok: true, visible, why };
+  o.timer = setTimeout(() => { o.active = false; for (const e of [o.glow, o.pill, o.box, o.cursor]) show(e, false); }, 5000);
+  const why = o.covered();
+  return { ok: true, visible: !why, why };
 }
 
-function zbScroll(a, expectedOrigin) {
+function zbScroll(a, expectedOrigin, guard) {
   if (location.origin !== expectedOrigin) return { ok: false, code: "OUT_OF_SCOPE", message: "page origin changed" };
-  const byRef = (r) => { const reg = globalThis.__zbRefs, w = reg && reg.map.get(r), e = w && w.deref(); return e && e.isConnected ? e : null; };
-  const delta = a.dx !== undefined || a.dy !== undefined;
-  let el = null;
-  if (a.ref !== undefined) {
-    el = byRef(a.ref);
-    if (!el) return { ok: false, code: "INVALID", message: "ref not found (the page changed?): call read_tree or find again" };
-  } else if (a.selector !== undefined) {
-    try { el = document.querySelector(a.selector); } catch (e) { return { ok: false, code: "INVALID", message: "invalid CSS selector" }; }
-    if (!el) return { ok: false, code: "INVALID", message: "no element matches selector" };
-  } else if (a.x !== undefined) {
-    if (a.x > window.innerWidth || a.y > window.innerHeight) return { ok: false, code: "INVALID", message: "point is outside the viewport" };
-    el = document.elementFromPoint(a.x, a.y);
+  // ZB-11: with activity cues on, check the overlay inside this same task, right before acting and right after.
+  const G = guard ? globalThis.__zbOverlay : null;
+  if (guard) {
+    const no = G && G.before ? G.before() : { ok: false, code: "REFUSED", message: "zenbridge's activity overlay is missing from this page, so Claude didn't act" };
+    if (no) return no;
   }
-  if (!delta) {
-    if (!el) return { ok: false, code: "INVALID", message: "give dx/dy, or a ref or selector to scroll into view" };
-    el.scrollIntoView({ block: "center", behavior: "instant" });
-    return { ok: true, scrollX: window.scrollX, scrollY: window.scrollY, target: "page" };
-  }
-  // Scroll the nearest scrollable area around the target (like a mouse wheel there), else the page.
-  const scroller = (e) => {
-    for (; e && e !== document.body && e !== document.documentElement; e = e.parentElement || (e.getRootNode && e.getRootNode().host)) {
-      const cs = getComputedStyle(e);
-      const canY = /(auto|scroll|overlay)/.test(cs.overflowY) && e.scrollHeight > e.clientHeight;
-      const canX = /(auto|scroll|overlay)/.test(cs.overflowX) && e.scrollWidth > e.clientWidth;
-      if ((a.dy && canY) || (a.dx && canX)) return e;
+  const res = (() => {
+    const byRef = (r) => { const reg = globalThis.__zbRefs, w = reg && reg.map.get(r), e = w && w.deref(); return e && e.isConnected ? e : null; };
+    const delta = a.dx !== undefined || a.dy !== undefined;
+    let el = null;
+    if (a.ref !== undefined) {
+      el = byRef(a.ref);
+      if (!el) return { ok: false, code: "INVALID", message: "ref not found (the page changed?): call read_tree or find again" };
+    } else if (a.selector !== undefined) {
+      try { el = document.querySelector(a.selector); } catch (e) { return { ok: false, code: "INVALID", message: "invalid CSS selector" }; }
+      if (!el) return { ok: false, code: "INVALID", message: "no element matches selector" };
+    } else if (a.x !== undefined) {
+      if (a.x > window.innerWidth || a.y > window.innerHeight) return { ok: false, code: "INVALID", message: "point is outside the viewport" };
+      el = document.elementFromPoint(a.x, a.y);
     }
-    return null;
-  };
-  const box = el && scroller(el);
-  if (box) {
-    box.scrollBy({ left: a.dx || 0, top: a.dy || 0, behavior: "instant" });
-    return { ok: true, scrollX: box.scrollLeft, scrollY: box.scrollTop, target: "element" };
-  }
-  window.scrollBy({ left: a.dx || 0, top: a.dy || 0, behavior: "instant" });
-  return { ok: true, scrollX: window.scrollX, scrollY: window.scrollY, target: "page" };
+    if (!delta) {
+      if (!el) return { ok: false, code: "INVALID", message: "give dx/dy, or a ref or selector to scroll into view" };
+      el.scrollIntoView({ block: "center", behavior: "instant" });
+      return { ok: true, scrollX: window.scrollX, scrollY: window.scrollY, target: "page" };
+    }
+    // Scroll the nearest scrollable area around the target (like a mouse wheel there), else the page.
+    const scroller = (e) => {
+      for (; e && e !== document.body && e !== document.documentElement; e = e.parentElement || (e.getRootNode && e.getRootNode().host)) {
+        const cs = getComputedStyle(e);
+        const canY = /(auto|scroll|overlay)/.test(cs.overflowY) && e.scrollHeight > e.clientHeight;
+        const canX = /(auto|scroll|overlay)/.test(cs.overflowX) && e.scrollWidth > e.clientWidth;
+        if ((a.dy && canY) || (a.dx && canX)) return e;
+      }
+      return null;
+    };
+    const box = el && scroller(el);
+    if (box) {
+      box.scrollBy({ left: a.dx || 0, top: a.dy || 0, behavior: "instant" });
+      return { ok: true, scrollX: box.scrollLeft, scrollY: box.scrollTop, target: "element" };
+    }
+    window.scrollBy({ left: a.dx || 0, top: a.dy || 0, behavior: "instant" });
+    return { ok: true, scrollX: window.scrollX, scrollY: window.scrollY, target: "page" };
+  })();
+  return guard ? G.after(res) : res;
 }
 
 // The newer page actions (tree, find, hover, drag, key, form, wait, upload, console) share helpers,
 // so they live in one self-contained function and dispatch on a.op. Refs are kept in the extension's
 // isolated world (globalThis), never written into the page, and die with the document.
-function zbPage(a, expectedOrigin) {
-  if (location.origin !== expectedOrigin) return { ok: false, code: "OUT_OF_SCOPE", message: "page origin changed" };
+function zbPage(a, expectedOrigin, guard) {
+  if (location.origin !== expectedOrigin, guard) return { ok: false, code: "OUT_OF_SCOPE", message: "page origin changed" };
+  // ZB-11: with activity cues on, check the overlay inside this same task, right before acting and right after.
+  const G = guard ? globalThis.__zbOverlay : null;
+  if (guard) {
+    const no = G && G.before ? G.before() : { ok: false, code: "REFUSED", message: "zenbridge's activity overlay is missing from this page, so Claude didn't act" };
+    if (no) return no;
+  }
   const fail = (code, message) => ({ zbFail: true, code, message });
   const reg = globalThis.__zbRefs || (globalThis.__zbRefs = { map: new Map(), ids: new WeakMap(), next: 1 });
   const refOf = (el) => {
@@ -886,7 +976,8 @@ function zbPage(a, expectedOrigin) {
     throw fail("INVALID", "unknown page operation");
   };
   try {
-    return run();
+    const res = run();
+    return guard ? G.after(res) : res;
   } catch (e) {
     if (e && e.zbFail) return { ok: false, code: e.code, message: e.message };
     return { ok: false, code: "INTERNAL", message: `page action failed (${String((e && e.name) || "error").slice(0, 40)})` };

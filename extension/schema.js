@@ -69,6 +69,7 @@ const ZB_SCHEMA = {
         "TIMEOUT",
         "NOT_CONNECTED",
         "REFUSED",
+        "PAUSED",
         "INTERNAL"
        ],
        "type": "string"
@@ -156,9 +157,12 @@ const ZB_SCHEMA = {
   "TIMEOUT",
   "NOT_CONNECTED",
   "REFUSED",
+  "PAUSED",
   "INTERNAL"
  ],
  "limits": {
+  "actionCap": 600,
+  "actionCapWindowSeconds": 600,
   "confirmTimeoutSeconds": 60,
   "maxFrameBytes": 16777216,
   "maxSelector": 1000,
@@ -1889,6 +1893,13 @@ const ZB_SCHEMA = {
       "pattern": "^[A-Za-z0-9+/]+={0,2}$",
       "type": "string"
      },
+     "folder": {
+      "description": "Where the file is, for the upload prompt only (~/Downloads/sub).",
+      "maxLength": 1024,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "type": "string"
+     },
      "index": {
       "maximum": 99,
       "minimum": 0,
@@ -1920,6 +1931,7 @@ const ZB_SCHEMA = {
      "index",
      "total",
      "name",
+     "folder",
      "mimeType",
      "data"
     ],

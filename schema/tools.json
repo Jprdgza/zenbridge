@@ -8,7 +8,9 @@
   "maxUrl": 2048,
   "timeoutSeconds": 15,
   "screenshotTimeoutSeconds": 30,
-  "confirmTimeoutSeconds": 60
+  "confirmTimeoutSeconds": 60,
+  "actionCap": 600,
+  "actionCapWindowSeconds": 600
  },
  "errorCodes": [
   "NOT_ARMED",
@@ -17,6 +19,7 @@
   "TIMEOUT",
   "NOT_CONNECTED",
   "REFUSED",
+  "PAUSED",
   "INTERNAL"
  ],
  "envelope": {
@@ -152,6 +155,7 @@
         "TIMEOUT",
         "NOT_CONNECTED",
         "REFUSED",
+        "PAUSED",
         "INTERNAL"
        ]
       },
@@ -1955,6 +1959,7 @@
      "index",
      "total",
      "name",
+     "folder",
      "mimeType",
      "data"
     ],
@@ -1978,6 +1983,13 @@
       "minLength": 1,
       "maxLength": 255,
       "pattern": "^[^/\\u0000-\\u001f]+$"
+     },
+     "folder": {
+      "description": "Where the file is, for the upload prompt only (~/Downloads/sub).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
      },
      "mimeType": {
       "type": "string",

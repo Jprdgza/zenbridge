@@ -134,9 +134,12 @@ Requirements:
 - **Turn everything off:** **Alt+Shift+K**. This releases every tab and revokes
   the permission, so Claude stays off until you turn it on again.
 - **zenbridge asks you** in a small window of its own before every file upload
-  (it shows the files and the site receiving them), and before Claude moves
-  between public websites and local addresses like localhost. Web pages can't
-  see or click that window. No answer within 60 seconds counts as no.
+  (it shows each file with its folder, and the site receiving them), and before
+  Claude moves between public websites and local addresses like localhost or your
+  home network. Web pages can't see or click that window, only a mouse click on
+  Allow says yes, and no answer within 60 seconds counts as no.
+- **Too many actions pause Claude:** more than 600 tool calls in 10 minutes
+  pauses it (the badge shows **II**) until you click the toolbar button.
 
 ### Settings
 
@@ -195,7 +198,13 @@ tail -f ~/Library/Logs/zenbridge/actions.jsonl
 - Uploads and moves between public websites and local addresses wait for your
   click in a zenbridge window, which neither web pages nor the MCP server can
   answer. The "Claude is working" overlay lives in the browser's top layer and
-  is checked before every action; a page that hides or covers it gets no actions.
+  is checked inside each action, right before and right after it, so a page
+  can't slip a cover over it in between; a page that hides or covers it gets no
+  actions.
+- Local addresses are recognised by address, not just by name: private and
+  link-local ranges, IPv4-mapped IPv6, `.local`/`.internal`/`.lan` names, names
+  whose DNS answer is local, and sites served from a local address (DNS
+  rebinding) all count as local.
 - **Any program running as you can use zenbridge while Claude is on.** The
   socket only checks that the caller is your user, so while Claude is on (or a
   tab is handed over), any process running as you can connect and drive
@@ -238,10 +247,13 @@ python3 -m unittest discover -s tests
 cd tests/js && node --test
 ```
 
-The overlay check also runs in a real browser: serve the repo with
-`python3 -m http.server 8793 --bind 127.0.0.1`, open
-`http://127.0.0.1:8793/tests/browser/overlay.html` in Firefox or Zen, and every
-line should say PASS.
+The overlay check also runs in a real browser. This opens
+`tests/browser/overlay.html` in a throwaway headless Zen profile and prints every
+line (all should say PASS); pass a Firefox binary as the argument to use it instead:
+
+```bash
+python3 tests/browser/run_overlay.py
+```
 
 `schema/tools.json` is the single source of truth. After editing it, run
 `python3 gen_schema.py` to regenerate `extension/schema.js` (a test checks they

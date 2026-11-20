@@ -104,6 +104,19 @@ class LogTest(unittest.TestCase):
         self.assertEqual(refused["outcome"], "refused")
         self.assertTrue(refused["url"].startswith("https://evil.example/"))
 
+    def test_action_cap_pause_is_logged(self):
+        """ZB-14: when the per-session action cap trips, and while Claude stays paused, the log says so."""
+        log = zh.ActionLog(self.path)
+        self.addCleanup(os.close, log.fd)
+        host = zh.Host(lambda n: b"", lambda b: None, log)
+        msg = "the action limit was just reached (more than 600 tool calls in 10 minutes), so zenbridge paused Claude"
+        host.call_extension = lambda req: {"v": 1, "id": req["id"], "ok": False, "error": {"code": "PAUSED", "message": msg}}
+        resp = host.handle_request({"v": 1, "id": rid(), "tool": "tabs_list", "args": {}})
+        self.assertEqual(resp["error"]["code"], "PAUSED")
+        (line,) = self.lines()
+        self.assertEqual(line["outcome"], "paused")
+        self.assertIn("PAUSED: the action limit was just reached", line["reason"])
+
     def test_confirm_tools_wait_longer_than_the_question(self):
         """The host must still be waiting when you answer zenbridge's 60 s question."""
         limits = zh.zbcore.LIMITS

@@ -1,7 +1,8 @@
 "use strict";
 // The window zenbridge opens to ask you before an upload, or before Claude moves between public sites and
-// local addresses (ZB-7, ZB-8). Only a real (trusted) click here answers yes. Allow wakes up after a second,
-// so a click or key press meant for another window can't say yes by accident. Closing the window says no.
+// local addresses (ZB-7, ZB-8). Only a real (trusted) pointer click here answers yes: Enter or Space on a
+// focused Allow doesn't (ZB-14), and focus starts on "Don't allow". Allow wakes up after a second, so a click
+// or key press meant for another window can't say yes by accident. Closing the window says no.
 const id = location.hash.slice(1);
 const $ = (x) => document.getElementById(x);
 let bg = null;
@@ -30,7 +31,9 @@ function render(d) {
     const list = document.createElement("ul");
     for (const f of d.files) {
       const li = document.createElement("li");
-      li.textContent = `${f.name} (${size(f.bytes)})`;
+      // The folder too (ZB-14), so a harmless-looking name from an unexpected place stands out.
+      const folder = typeof f.folder === "string" && f.folder ? f.folder.replace(/\/+$/, "") : "(unknown folder)";
+      li.textContent = `${folder}/${f.name} (${size(f.bytes)})`;
       list.appendChild(li);
     }
     $("body").appendChild(list);
@@ -49,10 +52,16 @@ function render(d) {
     $("allow").textContent = "Allow";
   }
   line("Allow only if you asked Claude to do this.");
-  setTimeout(() => { $("allow").disabled = false; }, 1000);
+  $("deny").focus();
+  setTimeout(() => { $("allow").disabled = false; $("allow").tabIndex = -1; }, 1000);
 }
 
-$("allow").addEventListener("click", (e) => { if (e.isTrusted && !$("allow").disabled) reply(true); });
+// A pointer click: a real mouse, pen or touch press has a click count (detail) or a pointerType. A click
+// made by pressing Enter or Space has neither, and is ignored.
+const pointerClick = (e) => e.isTrusted && (e.detail > 0 || (typeof e.pointerType === "string" && e.pointerType !== ""));
+$("allow").addEventListener("click", (e) => { if (pointerClick(e) && !$("allow").disabled) reply(true); });
+// Keys never say yes: keep keyboard focus off Allow.
+$("allow").addEventListener("focus", () => $("deny").focus());
 $("deny").addEventListener("click", () => reply(false));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") reply(false); });
 browser.runtime.getBackgroundPage().then((page) => {

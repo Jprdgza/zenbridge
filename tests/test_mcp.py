@@ -87,6 +87,22 @@ class UploadTest(unittest.TestCase):
         self.assertEqual(final["ref"], "ref_3")
         self.assertNotIn("paths", final)
         self.assertEqual(final["uploads"], [chunks[0]["uploadId"], chunks[3]["uploadId"]])
+        # ZB-14: the prompt shows where each file is, not just its name (the page only gets the name).
+        want = os.path.dirname(os.path.realpath(paths[0]))
+        home = os.path.realpath(mcp.HOME)
+        if want.startswith(home + os.sep):
+            want = "~" + want[len(home):]
+        self.assertEqual({c["folder"] for c in chunks}, {want})
+
+    def test_display_folder(self):
+        home = os.path.realpath(mcp.HOME)
+        self.assertEqual(mcp.display_folder(os.path.join(home, "Downloads", "x.pdf")), "~/Downloads")
+        self.assertEqual(mcp.display_folder(os.path.join(home, "Downloads", "sub", "x.pdf")), "~/Downloads/sub")
+        self.assertEqual(mcp.display_folder("/Volumes/USB/x.pdf"), os.path.realpath("/Volumes/USB"))
+        self.assertNotIn("\n", mcp.display_folder(os.path.join(home, "a\nb", "x.pdf")))
+        long = mcp.display_folder("/" + "d" * 2000 + "/x.pdf")
+        self.assertLessEqual(len(long), 1024)
+        self.assertTrue(long.startswith("..."))
 
     def test_refusals_never_reach_the_browser(self):
         os.makedirs(os.path.join(self.dir, ".ssh"))

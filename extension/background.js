@@ -16,6 +16,7 @@ const TITLES = {
   "": "zenbridge: click to arm this tab for Claude",
   ON: "zenbridge: ARMED - click to disarm",
   "!!": "zenbridge: armed but OUT OF SCOPE (Claude is blocked) - click to disarm, Shift+click to add this site",
+  "II": "zenbridge: Claude is PAUSED after too many actions in a short time - click to let it continue",
 };
 const ignore = () => {};
 let session = false;  // a session lets Claude open its own tabs without any armed page
@@ -23,8 +24,49 @@ let hostStatus = "connecting";  // "connected" | "missing" (companion app not in
 // ZB-8: the kinds of site Claude has seen since Claude was last fully off ("local" = allowlist or loopback,
 // "public" = the rest), whether you armed a local tab by hand, and the origins you allowed it to cross into.
 const crossing = { touched: new Set(), handArmedLocal: false, approved: new Set() };
-const isLocal = (origin) => zbIsLocal(origin, ZB_CONFIG.allowlist);
+// ZB-14 / R-041: a runaway or injected loop can't fire thousands of actions. More than actionCap tool calls in
+// actionCapWindowSeconds pauses Claude (every call answers PAUSED, and the companion app logs it) until you
+// click the zenbridge button. Turning Claude off clears it.
+let paused = false;
+let callTimes = [];
+function setPaused(on) {
+  paused = on;
+  callTimes = [];
+  setGlobalBadge();
+  for (const tabId of armed.keys()) browser.tabs.get(tabId).then((t) => setBadge(tabId, t.url), ignore);
+}
+
+// ZB-12: origins whose name looks public but that resolve to, or were reached at, a local address.
+const localByAddress = new Set();
+const isLocal = (origin) => zbIsLocal(origin, ZB_CONFIG.allowlist) || localByAddress.has(origin);
 const zoneOf = (origin) => (isLocal(origin) ? "local" : "public");
+// Ask DNS where a public-looking name points (localtest.me, *.nip.io and split-horizon names point at local
+// addresses). Any local answer makes the origin local. Answers are cached for a minute; a failed lookup
+// leaves the name as it looks (the page won't load anyway), and the connected-address check below still runs.
+const dnsSeen = new Map();
+async function resolveZone(origin) {
+  if (isLocal(origin) || !browser.dns) return zoneOf(origin);
+  let host;
+  try { host = new URL(origin).hostname; } catch (e) { return zoneOf(origin); }
+  if (host.startsWith("[") || /^[\d.]+$/.test(host)) return zoneOf(origin);  // a literal: zbIsLocal already decided
+  const hit = dnsSeen.get(host);
+  if (!hit || Date.now() - hit.t > 60000) {
+    let addresses = [];
+    try {
+      const r = await withTimeout(browser.dns.resolve(host), 3000, "DNS lookup timed out");
+      addresses = Array.isArray(r && r.addresses) ? r.addresses : [];
+    } catch (e) { addresses = []; }
+    if (dnsSeen.size > 500) dnsSeen.clear();
+    dnsSeen.set(host, { t: Date.now(), local: addresses.some(zbIsLocalAddress) });
+  }
+  if (dnsSeen.get(host).local) markLocal(origin);
+  return zoneOf(origin);
+}
+function markLocal(origin) {
+  if (!origin || localByAddress.has(origin)) return;
+  if (localByAddress.size > 1000) localByAddress.clear();
+  localByAddress.add(origin);
+}
 
 // Settings from the settings page; sanitized, since storage is just data.
 function applySettings(raw) { Object.assign(ZB_CONFIG, zbSanitizeSettings(raw, ZB_DEFAULTS, ZB_TUNABLE)); }
@@ -58,6 +100,12 @@ function zbStatus() {
 
 // The toolbar badge without a tab-specific one: "!" if the companion app is missing, "AI" when Claude is on.
 function setGlobalBadge() {
+  if (paused) {
+    browser.browserAction.setBadgeText({ text: "II" }).catch(ignore);
+    browser.browserAction.setBadgeBackgroundColor({ color: ZB_COLORS.warn }).catch(ignore);
+    browser.browserAction.setTitle({ title: TITLES.II }).catch(ignore);
+    return;
+  }
   const missing = hostStatus === "missing";
   browser.browserAction.setBadgeText({ text: missing ? "!" : session ? "AI" : "" }).catch(ignore);
   browser.browserAction.setBadgeBackgroundColor({ color: missing ? ZB_COLORS.warn : ZB_COLORS.accent }).catch(ignore);
@@ -68,7 +116,7 @@ function setGlobalBadge() {
 }
 
 function setBadge(tabId, url) {
-  const b = zbBadge(armed.get(tabId), url);
+  const b = paused && armed.has(tabId) ? { text: "II", color: ZB_COLORS.warn } : zbBadge(armed.get(tabId), url);
   // null falls back to the global badge (session indicator) for unarmed tabs
   browser.browserAction.setBadgeText({ tabId, text: b.text || null }).catch(ignore);
   browser.browserAction.setTitle({ tabId, title: b.text ? TITLES[b.text] : null }).catch(ignore);
@@ -136,6 +184,7 @@ browser.permissions.onRemoved.addListener((p) => {
 });
 
 function endAll() {
+  if (paused) setPaused(false);
   for (const id of [...confirms.keys()]) finishConfirm(id, false);
   for (const tabId of [...armed.keys()]) disarm(tabId);
   setSession(false);
@@ -188,6 +237,7 @@ function disarm(tabId) {
 }
 
 browser.browserAction.onClicked.addListener((tab, info) => {
+  if (paused) { setPaused(false); return; }  // the click only lets Claude continue
   const origin = zbArmable(tab.url) ? zbOriginOf(tab.url) : null;
   const shift = !!(info && Array.isArray(info.modifiers) && info.modifiers.includes("Shift"));
   const decision = zbArmDecision(armed.get(tab.id), origin, shift);
@@ -238,6 +288,29 @@ if (browser.webRequest) {
   }, { ...all, types: ["main_frame"] });
   browser.webRequest.onCompleted.addListener((d) => onNetwork(d), all);
   browser.webRequest.onErrorOccurred.addListener((d) => onNetwork(d, d.error), all);
+  // ZB-12: the address each request in an armed tab actually connected to. A local one for a site that looks
+  // public (DNS rebinding, or a name that points home) is a crossing you haven't allowed: the response is
+  // cancelled before the page sees it, the origin is treated as local from now on, and the next tool call on
+  // it asks you first. onResponseStarted (not blocking) marks it too, in case cancelling isn't possible.
+  // Returns the origin when a site named like a public one answered from a local address (names that are
+  // local anyway, like localhost or your allowlist, are expected to).
+  const connectedLocal = (d) => {
+    if (!armed.has(d.tabId) || !d.ip || !zbIsLocalAddress(d.ip)) return null;
+    const origin = zbOriginOf(d.url);
+    return origin && !zbIsLocal(origin, ZB_CONFIG.allowlist) ? origin : null;
+  };
+  if (browser.webRequest.onHeadersReceived) {
+    browser.webRequest.onHeadersReceived.addListener((d) => {
+      const origin = connectedLocal(d);
+      if (!origin) return {};
+      markLocal(origin);
+      // Cancelled unless reaching it as a local site is already fine (you allowed it, or no crossing yet).
+      return zbCrossingNeedsOk(origin, true, crossing) ? { cancel: true } : {};
+    }, all, ["blocking"]);
+  }
+  if (browser.webRequest.onResponseStarted) {
+    browser.webRequest.onResponseStarted.addListener((d) => { const origin = connectedLocal(d); if (origin) markLocal(origin); }, all);
+  }
 }
 browser.commands.onCommand.addListener((name) => {
   if (name === "disarm-all") endAll();
@@ -295,16 +368,18 @@ async function askUser(details) {
 }
 
 // ZB-8: before Claude reaches `origin`, ask you if that crosses between public sites and local addresses.
+// Returns the origin's zone ("local"/"public") for the caller to mark as touched.
 async function checkCrossing(origin, tabUrl) {
-  const local = isLocal(origin);
-  if (!zbCrossingNeedsOk(origin, local, crossing)) return;
+  const local = (await resolveZone(origin)) === "local";
+  if (!zbCrossingNeedsOk(origin, local, crossing)) return local ? "local" : "public";
   const ok = await askUser({ kind: "cross", origin, local, seenPublic: crossing.touched.has("public"),
     seenLocal: crossing.touched.has("local") });
   if (!ok) {
     throw new ZbError("REFUSED", `the user did not allow Claude to move to ${origin}: zenbridge asks before Claude goes `
       + "between public sites and local addresses (no answer within 60 s counts as no)", tabUrl);
   }
-  crossing.approved.add(origin);
+  crossing.approved.add(zbCrossingKey(origin, local));
+  return local ? "local" : "public";
 }
 
 // ------------------------------------------------------------- choke point
@@ -328,9 +403,15 @@ function withTimeout(promise, ms, message, ctx) {
   return Promise.race([promise, t]).finally(() => clearTimeout(timer));
 }
 
+// Page functions that take a third "guard" argument: with it, they check the activity overlay themselves,
+// right before and right after acting, in the same task as the action (ZB-11).
+const GUARDED = new Set([zbClick, zbType, zbScroll, zbReadText, zbPage]);
+
 async function inject(ctx, func, arg, ms = 8000) {
+  const args = [arg, ctx.origin];
+  if (ctx.guard && GUARDED.has(func)) args.push(true);
   const results = await withTimeout(
-    browser.scripting.executeScript({ target: { tabId: ctx.tab.id, frameIds: [0] }, func, args: [arg, ctx.origin] }),
+    browser.scripting.executeScript({ target: { tabId: ctx.tab.id, frameIds: [0] }, func, args }),
     ms, "the page did not respond in time (busy or frozen); the action may still happen", ctx);
   const r = results && results[0];
   if (!r || r.error || !r.result || typeof r.result !== "object") throw new ZbError("INTERNAL", "page script failed", ctx.url);
@@ -354,6 +435,7 @@ async function cue(ctx, arg, pause) {
     const why = String(r.why || "").replace(/[^a-z0-9 ,]/gi, "").slice(0, 80);
     throw new ZbError("REFUSED", `this page hides or covers zenbridge's activity overlay${why ? ` (${why})` : ""}, so Claude won't act on it`, ctx.url);
   }
+  if (!arg.hide) ctx.guard = true;  // from now on the action checks the overlay itself, in its own task
   if (pause && ZB_CONFIG.cursorDelayMs > 0) await new Promise((r) => setTimeout(r, ZB_CONFIG.cursorDelayMs));
 }
 const quietCue = (ctx, arg) => cue(ctx, arg).catch(ignore);  // after an action, or hiding it for a screenshot
@@ -405,9 +487,9 @@ const TOOLS = {
       throw new ZbError("OUT_OF_SCOPE", ZB_CONFIG.goAnywhere ? "this site cannot be opened (add-on store)"
         : "tab_open is limited to origins already in an armed tab's scope, plus local addresses while Claude is on");
     }
-    await checkCrossing(origin);
+    const zone = await checkCrossing(origin);
     const tab = await browser.tabs.create({ url: a.url, active: true });
-    crossing.touched.add(zoneOf(origin));
+    crossing.touched.add(zone);
     // tabs.create resolves while the tab is still about:blank; wait (up to 5 s) for the page, so the next
     // action doesn't hit a blank or half-loaded tab.
     for (let i = 0; i < 50; i++) {
@@ -600,8 +682,8 @@ const TOOLS = {
     const now = Date.now();
     for (const [id, u] of uploads) if (now - u.t > 120000) uploads.delete(id);
     let u = uploads.get(a.uploadId);
-    if (!u) uploads.set(a.uploadId, u = { parts: new Array(a.total).fill(null), total: a.total, name: a.name, mimeType: a.mimeType, got: 0, t: now });
-    if (u.total !== a.total || u.name !== a.name || u.mimeType !== a.mimeType || a.index >= a.total) {
+    if (!u) uploads.set(a.uploadId, u = { parts: new Array(a.total).fill(null), total: a.total, name: a.name, folder: a.folder, mimeType: a.mimeType, got: 0, t: now });
+    if (u.total !== a.total || u.name !== a.name || u.folder !== a.folder || u.mimeType !== a.mimeType || a.index >= a.total) {
       uploads.delete(a.uploadId);
       throw new ZbError("INVALID", "inconsistent upload piece");
     }
@@ -618,11 +700,11 @@ const TOOLS = {
     for (const id of a.uploads) {
       const u = uploads.get(id);
       if (!u || u.got !== u.total) throw new ZbError("INVALID", "upload incomplete or expired; try again", ctx.url);
-      files.push({ name: u.name, mimeType: u.mimeType, data: u.parts.join("") });
+      files.push({ name: u.name, folder: u.folder, mimeType: u.mimeType, data: u.parts.join("") });
     }
     for (const id of a.uploads) uploads.delete(id);
     // ZB-7: Claude picked these files, maybe on a page's say-so. You decide whether this site gets them.
-    const sizes = files.map((f) => ({ name: f.name, bytes: Math.floor(f.data.length * 3 / 4) - (f.data.match(/=*$/)[0].length) }));
+    const sizes = files.map((f) => ({ name: f.name, folder: f.folder, bytes: Math.floor(f.data.length * 3 / 4) - (f.data.match(/=*$/)[0].length) }));
     const ok = await askUser({ kind: "upload", origin: ctx.origin, files: sizes });
     if (!ok) {
       throw new ZbError("REFUSED", "the user did not allow this upload: zenbridge asks before every upload "
@@ -631,7 +713,8 @@ const TOOLS = {
     const now = await resolveArmedTab(ctx.tab.id);  // the tab may have moved on while you decided
     if (now.origin !== ctx.origin) throw new ZbError("REFUSED", "the page changed while waiting for the user; nothing was uploaded", now.url);
     const { tabId, uploads: _ids, ...target } = a;
-    const r = await inject(now, zbPage, { op: "upload", ...target, files }, 12000);
+    await cue(now, { kind: "type", selector: target.selector, ref: target.ref, x: target.x, y: target.y }, false);  // shown again after the wait
+    const r = await inject(now, zbPage, { op: "upload", ...target, files: files.map(({ folder, ...f }) => f) }, 12000);  // the page never learns where
     return { files: Math.min(int(r.files), 10), bytes: Math.min(int(r.bytes), 100000000), target: r.target === "drop" ? "drop" : "input",
       origin: str(ctx.origin, 2048) };
   },
@@ -656,12 +739,26 @@ async function handleRequest(msg) {
   if (sessionExpired()) endAll();
   const err = zbValidateRequest(ZB_SCHEMA, msg);
   if (err) return fail("INVALID", err);
+  if (!ZB_SCHEMA.tools[msg.tool]["x-internal"]) {  // upload pieces are part of one file_upload
+    const L = ZB_SCHEMA.limits;
+    if (paused) {
+      return fail("PAUSED", "zenbridge paused Claude after too many actions in a short time; the user must click the "
+        + "zenbridge toolbar button to let it continue");
+    }
+    const r = zbRateCap(callTimes, Date.now(), L.actionCap, L.actionCapWindowSeconds * 1000);
+    callTimes = r.times;
+    if (r.over) {
+      setPaused(true);
+      return fail("PAUSED", `the action limit was just reached (more than ${L.actionCap} tool calls in `
+        + `${Math.round(L.actionCapWindowSeconds / 60)} minutes), so zenbridge paused Claude; the user must click the `
+        + "zenbridge toolbar button to let it continue");
+    }
+  }
   let ctx = null;
   try {
     if (Object.hasOwn(msg.args, "tabId")) ctx = await resolveArmedTab(msg.args.tabId);
     if (ctx && !NO_CROSSING.includes(msg.tool)) {  // ZB-8: reading or acting on a page in the other kind of site
-      await checkCrossing(ctx.origin, ctx.url);
-      crossing.touched.add(zoneOf(ctx.origin));
+      crossing.touched.add(await checkCrossing(ctx.origin, ctx.url));
     }
     const kind = ctx && CUES[msg.tool];
     if (kind) {

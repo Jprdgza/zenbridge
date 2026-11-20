@@ -35,3 +35,23 @@ Every build shows up under **Releases** (with its changes) and **Deployments**
 
 Note: AMO version numbers are unique across channels. A version signed here as
 unlisted can't also be submitted as listed, so bump the version for a store submission.
+
+## Supply chain
+
+The release job can hold the AMO signing key, so nothing it runs may change under it:
+
+- Every `uses:` in the workflows is pinned to a full commit SHA with a `# vX.Y.Z` comment.
+  Dependabot (`.github/dependabot.yml`) proposes updates; review each one before merging.
+- `web-ext` is pinned exactly in `package.json` and `package-lock.json` and installed with
+  `npm ci --ignore-scripts`. Run it locally the same way:
+
+  ```bash
+  npm ci --ignore-scripts && npm run lint
+  ```
+
+- Checkouts don't keep the GitHub token (`persist-credentials: false`).
+- `tests/test_workflows.py` fails if any of this regresses.
+
+Repository settings that complete it (not stored in the repo): required reviewers on the
+`release` environment, a tag ruleset that restricts who can create or move `v*` tags, and
+two-factor authentication on both the GitHub and addons.mozilla.org accounts.

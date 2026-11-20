@@ -13,23 +13,31 @@ const O = "http://localhost:3000";
 function fakePage() {
   const observers = new Set();
   const doc = { topLayer: [], shadows: [] };
-  const mutated = (target, type) => {
+  const within = (n, root) => { for (; n; n = n.parentNode) if (n === root) return true; return false; };
+  const mutated = (target, type, name) => {
     for (const ob of observers) {
-      if (ob.targets.some(([t, opts]) => t === target && opts[type])) ob.queue();
+      if (ob.targets.some(([t, opts]) => opts[type] && (t === target || (opts.subtree && within(target, t)))
+        && !(type === "attributes" && opts.attributeFilter && !opts.attributeFilter.includes(name)))) ob.queue({ target, type, attributeName: name });
     }
+  };
+  const listeners = [];
+  const fire = (type, target, newState) => {
+    for (const [t, fn] of listeners) if (t === type) fn({ type, target, newState });
   };
   class Style {
     constructor(owner) { this.owner = owner; this.m = new Map(); }
-    setProperty(k, v, prio = "") { this.m.set(k, { v: String(v), prio }); if (this.owner.inDom) mutated(this.owner, "attributes"); }
+    setProperty(k, v, prio = "") { this.m.set(k, { v: String(v), prio }); if (this.owner.inDom) mutated(this.owner, "attributes", "style"); }
     getPropertyValue(k) { const e = this.m.get(k); return e ? e.v : ""; }
     getPropertyPriority(k) { const e = this.m.get(k); return e ? e.prio : ""; }
   }
   class El {
     constructor(tag) { this.tagName = tag; this.children = []; this.parentNode = null; this.attrs = new Map(); this.inDom = true; this.style = new Style(this); this.open = false; }
     get attributes() { return [...this.attrs.keys()].map((name) => ({ name })); }
-    setAttribute(n, v) { this.attrs.set(n, String(v)); mutated(this, "attributes"); }
+    setAttribute(n, v) { this.attrs.set(n, String(v)); mutated(this, "attributes", n); }
+    hasAttribute(n) { return this.attrs.has(n); }
+    get localName() { return this.tagName.toLowerCase(); }
     getAttribute(n) { return this.attrs.has(n) ? this.attrs.get(n) : null; }
-    removeAttribute(n) { if (n === "style") this.style = new Style(this); this.attrs.delete(n); mutated(this, "attributes"); }
+    removeAttribute(n) { if (n === "style") this.style = new Style(this); this.attrs.delete(n); mutated(this, "attributes", n); }
     get id() { return this.getAttribute("id") || ""; }
     set id(v) { this.setAttribute("id", v); }
     appendChild(c) { if (c.parentNode) c.parentNode.removeChild(c); this.children.push(c); c.parentNode = this; mutated(this, "childList"); return c; }
@@ -44,11 +52,19 @@ function fakePage() {
     attachShadow(opts) { const r = new El("#shadow"); r.host = this; this.shadowMode = opts.mode; doc.shadows.push(r); return r; }
     get shadowRoot() { return null; }  // closed
     matches(sel) { return sel === ":popover-open" && this.open; }
+    // Like the real thing: beforetoggle fires synchronously before it opens, toggle in a later task.
     showPopover() {
       if (this.getAttribute("popover") === null || !this.isConnected || this.open) throw new Error("InvalidStateError");
+      fire("beforetoggle", this, "open");
       this.open = true; doc.topLayer.push(this);
+      setImmediate(() => fire("toggle", this, "open"));
     }
-    hidePopover() { if (!this.open) throw new Error("InvalidStateError"); this.open = false; doc.topLayer = doc.topLayer.filter((x) => x !== this); }
+    hidePopover() {
+      if (!this.open) throw new Error("InvalidStateError");
+      fire("beforetoggle", this, "closed");
+      this.open = false; doc.topLayer = doc.topLayer.filter((x) => x !== this);
+    }
+    showModal() { this.setAttribute("open", ""); this.modal = true; doc.topLayer.push(this); }
     checkVisibility() {
       if (!this.isConnected) return false;
       for (let n = this; n; n = n.parentNode) {
@@ -75,14 +91,19 @@ function fakePage() {
     documentElement: html, body, activeElement: body,
     createElement: (t) => new El(t.toUpperCase()), createElementNS: (ns, t) => new El(t),
     getElementById: (id) => [...html.children].find((c) => c.id === id) || null,
-    querySelector: () => null,
+    querySelector: (sel) => (sel === ":modal" ? doc.topLayer.find((x) => x.modal) || null : null),
+    addEventListener: (type, fn, capture) => { if (capture === true) listeners.push([type, fn]); },
     elementFromPoint: () => { if (doc.pinned) return doc.pinned; for (const el of [...doc.topLayer].reverse()) if (hitsOn(el)) return el; return body; },
   };
   class MutationObserver {
-    constructor(cb) { this.cb = cb; this.targets = []; this.pending = false; observers.add(this); }
+    constructor(cb) { this.cb = cb; this.targets = []; this.recs = []; observers.add(this); }
     observe(t, opts) { this.targets.push([t, opts]); }
-    disconnect() { this.targets = []; this.pending = false; }
-    queue() { if (this.pending) return; this.pending = true; queueMicrotask(() => { if (this.pending) { this.pending = false; this.cb([]); } }); }
+    disconnect() { this.targets = []; this.recs = []; }
+    queue(rec) {
+      this.recs.push(rec);
+      if (this.recs.length > 1) return;
+      queueMicrotask(() => { const r = this.recs; this.recs = []; if (r.length) this.cb(r); });
+    }
   }
   const ctx = vm.createContext({ location: { origin: O }, document, MutationObserver, innerWidth: 800, innerHeight: 600,
     setTimeout: () => 0, clearTimeout: () => {}, Date, queueMicrotask });
@@ -197,4 +218,121 @@ test("overlay: hidden only for screenshots, and only by zenbridge", () => {
 test("overlay: refuses a page whose origin changed", () => {
   const p = fakePage();
   assert.strictEqual(p.ctx.zbShow({ kind: "glow" }, "https://other.example").code, "OUT_OF_SCOPE");
+});
+
+// ---------------------------------------------------------------- ZB-11: covered after the check
+const cover = (p) => {
+  const c = new p.El("DIV");
+  p.body.appendChild(c);
+  c.setAttribute("popover", "manual");
+  return c;
+};
+const readGuarded = (p) => {
+  p.body.innerText = "page text";
+  p.document.querySelectorAll = () => [];
+  p.document.title = "t";
+  return p.ctx.zbReadText({ maxChars: 100 }, O, true);
+};
+
+test("ZB-11: the race proof (page opens a popover in a microtask when the overlay appears) ends with ours on top", async () => {
+  const p = fakePage();
+  const pageObs = new p.MutationObserver(() => { const c = cover(p); queueMicrotask(() => c.showPopover()); pageObs.disconnect(); });
+  pageObs.observe(p.html, { childList: true });
+  assert.strictEqual(p.show({ kind: "click", x: 10, y: 10 }).visible, true);
+  await settle();
+  assert.strictEqual(p.doc.topLayer.at(-1), p.host(), "re-shown above the page's cover");
+  assert.ok(p.ctx.__zbOverlay.fights.length >= 1, "counted as a fight");
+  assert.strictEqual(readGuarded(p).ok, true, "the action then goes ahead: the overlay is showing");
+});
+
+test("ZB-11: a cover the listeners don't see is caught inside the action, before it acts", async () => {
+  const p = fakePage();
+  p.show();
+  const c = cover(p);
+  c.open = true; p.doc.topLayer.push(c);  // above ours, without any toggle event reaching zenbridge
+  const r = readGuarded(p);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, "REFUSED");
+  assert.match(r.message, /just before the action/);
+  assert.strictEqual(r.text, undefined, "nothing was read");
+  assert.strictEqual(p.doc.topLayer.at(-1), p.host(), "and the overlay is put back on top for you to see");
+});
+
+test("ZB-11: no overlay in the page (removed with the page's realm, or never shown) means no action", () => {
+  const p = fakePage();
+  const r = readGuarded(p);
+  assert.strictEqual(r.code, "REFUSED");
+  assert.match(r.message, /missing/);
+});
+
+test("ZB-11: an action that opens a page popover itself (a menu) still passes: the overlay goes back on top", () => {
+  const p = fakePage();
+  p.show();
+  const o = p.ctx.__zbOverlay, c = cover(p);
+  const r = o.after((() => { c.showPopover(); return { ok: true, n: 1 }; })());
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.n, 1);
+  assert.strictEqual(p.doc.topLayer.at(-1), p.host());
+});
+
+test("ZB-11: covered after the action and it can't be undone: REFUSED, and the page is refused from then on", () => {
+  const p = fakePage();
+  p.show();
+  const o = p.ctx.__zbOverlay;
+  p.doc.pinned = new p.El("DIV");
+  const r = o.after({ ok: true });
+  assert.strictEqual(r.code, "REFUSED");
+  assert.match(r.message, /during the action/);
+  p.doc.pinned = null;
+  assert.strictEqual(o.tampered, true);
+  assert.strictEqual(readGuarded(p).code, "REFUSED");
+  assert.strictEqual(p.show().visible, false);
+});
+
+test("ZB-11: the check after the action also covers actions that finish later (wait_for)", async () => {
+  const p = fakePage();
+  p.show();
+  const o = p.ctx.__zbOverlay;
+  p.doc.pinned = new p.El("DIV");
+  const r = await o.after(Promise.resolve({ ok: true }));
+  assert.strictEqual(r.code, "REFUSED");
+});
+
+test("ZB-11: a modal dialog opened while Claude acts puts the overlay back above it", async () => {
+  const p = fakePage();
+  p.show();
+  const d = new p.El("DIALOG");
+  p.body.appendChild(d);
+  d.showModal();
+  assert.strictEqual(p.doc.topLayer.at(-1), d);
+  await settle();
+  assert.strictEqual(p.doc.topLayer.at(-1), p.host());
+  assert.ok(p.ctx.__zbOverlay.fights.length >= 1);
+});
+
+test("ZB-11: a page that keeps opening popovers over it is marked tampered", async () => {
+  const p = fakePage();
+  p.show();
+  const c = cover(p);
+  for (let i = 0; i < 15; i++) { c.showPopover(); await settle(); c.hidePopover(); }
+  assert.strictEqual(p.ctx.__zbOverlay.tampered, true);
+  assert.strictEqual(readGuarded(p).code, "REFUSED");
+});
+
+test("ZB-11: when Claude isn't acting, page popovers are left alone and don't count", async () => {
+  const p = fakePage();
+  p.show({ hide: true });
+  const c = cover(p);
+  for (let i = 0; i < 15; i++) { c.showPopover(); await settle(); c.hidePopover(); }
+  assert.strictEqual(p.ctx.__zbOverlay.fights.length, 0);
+  assert.strictEqual(p.ctx.__zbOverlay.tampered, false);
+});
+
+test("ZB-11: every page action takes the guard (static check)", () => {
+  for (const fn of ["zbClick", "zbType", "zbReadText", "zbScroll", "zbPage"]) {
+    const src = String(vm.runInContext(fn, fakePage().ctx));
+    assert.match(src, new RegExp(`^function ${fn}\\(a, expectedOrigin, guard\\)`), fn);
+    assert.match(src, /G\.before\(\)/, fn);
+    assert.match(src, /guard \? G\.after\(res\) : res/, fn);
+  }
 });

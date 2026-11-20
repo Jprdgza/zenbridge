@@ -86,7 +86,8 @@ class ManifestGuards(unittest.TestCase):
         self.doc = read("extension/manifest.README.md")
 
     def test_exact_permissions(self):
-        self.assertEqual(self.m["permissions"], ["nativeMessaging", "scripting", "activeTab", "tabGroups", "storage", "webRequest"])
+        self.assertEqual(self.m["permissions"], ["nativeMessaging", "scripting", "activeTab", "tabGroups", "storage", "webRequest",
+                                                 "webRequestBlocking", "dns"])
         self.assertEqual(self.m["optional_permissions"], ["http://*/*", "https://*/*", "<all_urls>"])
         self.assertEqual(self.m["manifest_version"], 2)
         self.assertTrue(self.m["background"]["persistent"])

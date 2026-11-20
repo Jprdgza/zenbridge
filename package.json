@@ -1,0 +1,13 @@
+{
+  "name": "zenbridge-tools",
+  "private": true,
+  "description": "Build tools only (web-ext, pinned exactly). The extension itself has no npm dependencies.",
+  "license": "MIT",
+  "scripts": {
+    "lint": "web-ext lint --source-dir extension --warnings-as-errors",
+    "build": "web-ext build --source-dir extension --artifacts-dir web-ext-artifacts"
+  },
+  "devDependencies": {
+    "web-ext": "8.10.0"
+  }
+}

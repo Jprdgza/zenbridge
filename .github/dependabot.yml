@@ -1,0 +1,16 @@
+# Proposes updates to the commit-SHA-pinned actions and the exact web-ext version (ZB-13).
+# Review each one: these run in the job that can sign releases.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    versioning-strategy: increase

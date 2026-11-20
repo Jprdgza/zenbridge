@@ -49,6 +49,41 @@
     check("visible again", show().visible === true);
     check("hide for screenshot", zbShow({ hide: true }, O).visible === false && !host().matches(":popover-open"));
     check("shows again after screenshot", show().visible === true);
+    // ZB-11: the page covers it asynchronously, after the check said visible.
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const covered = () => globalThis.__zbOverlay.covered();
+    const mk = () => { const c = document.createElement("div"); c.popover = "manual";
+      c.style.cssText = "inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;background:#fff;border:0"; document.body.appendChild(c); return c; };
+    const c1 = mk();
+    check("ZB-11 cue says visible", zbShow({ kind: "click", x: 100, y: 100 }, O).visible === true);
+    setTimeout(() => c1.showPopover(), 0);
+    await wait(60);
+    check("ZB-11 async page cover: put back on top by the toggle listener", covered() === "");
+    check("ZB-11 ... and the action goes ahead", zbReadText({ maxChars: 10 }, O, true).ok === true);
+    c1.hidePopover();
+    const c2 = mk();
+    for (const t of ["beforetoggle", "toggle"]) window.addEventListener(t, (e) => { if (e.target === c2) e.stopImmediatePropagation(); }, true);
+    check("ZB-11 cue says visible (2)", show().visible === true);
+    setTimeout(() => c2.showPopover(), 0);
+    await wait(60);
+    const blinded = zbReadText({ maxChars: 10 }, O, true);
+    check("ZB-11 page blinds the listener: action refused inside its own task", blinded.ok === false && blinded.code === "REFUSED" && !("text" in blinded));
+    check("ZB-11 ... and the overlay is back on top", covered() === "");
+    c2.hidePopover();
+    const c3 = mk();
+    check("ZB-11 cue says visible (3)", show().visible === true);
+    const opened = zbReadText({ maxChars: 10 }, O, true);  // control: no cover
+    check("ZB-11 uncovered action passes the after-check", opened.ok === true);
+    const o3 = globalThis.__zbOverlay;
+    const menu = o3.after((() => { c3.showPopover(); return { ok: true }; })());
+    check("ZB-11 action that opens a page popover (a menu) passes, overlay on top", menu.ok === true && covered() === "");
+    c3.hidePopover();
+    const d2 = document.createElement("dialog"); document.body.appendChild(d2);
+    show(); const f0 = globalThis.__zbOverlay.fights.length; d2.showModal(); await wait(30);
+    check("ZB-11 modal opened while acting: overlay re-shown (counted as a fight)", globalThis.__zbOverlay.fights.length > f0 && host().matches(":popover-open"));
+    d2.close();
+    // reset fights for the tests below (a fresh page would start at zero)
+    globalThis.__zbOverlay.fights = [];
     const fighter = new MutationObserver(() => { if (host() && host().style.display !== "none") host().style.display = "none"; });
     fighter.observe(host(), { attributes: true });
     host().style.display = "none";
@@ -57,7 +92,9 @@
     check("fighting page marked tampered", show().visible === false);
   } catch (e) { out.push("FAIL exception " + e); }
   document.getElementById("out").textContent = out.join("\n");
-  document.title = out.every((l) => l.startsWith("PASS")) ? "ALLPASS" : "FAILED";
+  document.title = out.every((l) => !l.startsWith("FAIL")) ? "ALLPASS" : "FAILED";
+  // ?report: POST the lines back to the serving script (tests/browser/run_overlay.py), for headless runs.
+  if (location.search.includes("report")) fetch("/result", { method: "POST", body: document.title + "\n" + out.join("\n") }).catch(() => {});
   window.__done = true;
 })();
 </script></body></html>

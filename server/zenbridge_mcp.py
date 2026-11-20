@@ -128,6 +128,17 @@ def read_upload(path):
         return name[:255], f.read(UPLOAD_MAX_BYTES + 1)
 
 
+def display_folder(path):
+    """The file's folder as the upload prompt shows it (ZB-14): ~/Downloads/sub, not just the file name, so a
+    harmless-looking name from an unexpected folder stands out. Control characters are replaced."""
+    folder = os.path.dirname(os.path.realpath(path))
+    home = os.path.realpath(HOME)
+    if folder == home or folder.startswith(home + os.sep):
+        folder = "~" + folder[len(home):]
+    folder = "".join(c if c.isprintable() else "?" for c in folder) or "/"
+    return folder if len(folder) <= 1024 else "..." + folder[-1021:]
+
+
 def upload(bridge, args):
     """Run file_upload: validate Claude's arguments, send the files in pieces, then attach them."""
     rid = secrets.token_hex(16)
@@ -145,9 +156,9 @@ def upload(bridge, args):
         total += len(data)
         if total > UPLOAD_MAX_BYTES:
             return zbcore.error(rid, "REFUSED", "files are larger than 10 MB in total")
-        files.append((name, data))
+        files.append((name, display_folder(path), data))
     ids = []
-    for name, data in files:
+    for name, folder, data in files:
         uid = secrets.token_hex(16)
         mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
         b64 = base64.b64encode(data).decode("ascii")
@@ -155,7 +166,7 @@ def upload(bridge, args):
         safe_name = "".join(c if c.isprintable() and c != "/" else "_" for c in name) or "file"
         for i, piece in enumerate(pieces):
             resp = bridge.call("upload_chunk", {"uploadId": uid, "index": i, "total": len(pieces), "name": safe_name,
-                                                "mimeType": mime, "data": piece})
+                                                "folder": folder, "mimeType": mime, "data": piece})
             if not resp.get("ok"):
                 return resp
         ids.append(uid)
@@ -260,7 +271,7 @@ def handle(msg, bridge):
         asked = params.get("protocolVersion")
         version = asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
         return ok({"protocolVersion": version, "capabilities": {"tools": {}},
-                   "serverInfo": {"name": "zenbridge", "version": "1.5.2"}})
+                   "serverInfo": {"name": "zenbridge", "version": "1.5.3"}})
     if method == "ping":
         return ok({})
     if method == "tools/list":

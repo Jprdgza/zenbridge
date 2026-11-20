@@ -2,6 +2,34 @@
 
 Each version here is a tagged release on GitHub with a signed `.xpi`.
 
+## [1.5.3] - 2026-11-19
+
+Fixes from the final round of the outside security review.
+
+- **The "Claude is working" overlay is checked inside each action**, right
+  before and right after it, so a page can't put something over it between the
+  check and the action. Page popovers or dialogs that open while Claude acts
+  are pushed back under the overlay, and a page that keeps doing it gets no more
+  actions. If a page still covers it, the action is refused.
+- **Local addresses are recognised by address, not just by name.** Home and
+  office network addresses (192.168.x, 10.x, 172.16-31.x, 100.64/10, 169.254.x,
+  fc00::/7, fe80::/10), IPv4-mapped IPv6 like `[::ffff:127.0.0.1]`, names ending
+  in `.local`, `.internal`, `.lan` or `.home.arpa`, single-word names like
+  `http://router/`, and public names that point at a local address (checked
+  with DNS) all count as local, so Claude asks before moving there from a public
+  site. A site that turns out to be served from a local address (DNS rebinding)
+  is blocked in tabs Claude controls until you allow it. This adds the `dns` and
+  `webRequestBlocking` permissions.
+- The Allow window now takes only a mouse click on Allow, never Enter or Space,
+  and starts with "Don't allow" focused. The upload prompt shows each file's
+  folder (`~/Downloads/report.pdf`), not just its name.
+- **Action limit:** more than 600 tool calls in 10 minutes pauses Claude (the
+  badge shows **II**) until you click the toolbar button. The action log records
+  it with the outcome `paused`.
+- Release builds are harder to tamper with: every GitHub Action is pinned to a
+  full commit, `web-ext` is pinned exactly with a lockfile, and Dependabot
+  proposes updates.
+
 ## [1.5.2] - 2026-11-19
 
 Fixes from a second outside security review.

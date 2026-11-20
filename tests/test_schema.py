@@ -33,7 +33,7 @@ VALID = {
     "console_messages": [{"tabId": 1}, {"tabId": 1, "filter": "err", "onlyErrors": True, "clear": True, "limit": 500}],
     "network_requests": [{"tabId": 1}, {"tabId": 1, "urlPattern": "/api/", "clear": True, "limit": 1}],
     "file_upload": [{"tabId": 1, "ref": "ref_1", "uploads": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}],
-    "upload_chunk": [{"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a.png", "mimeType": "image/png", "data": "QUJD"}],
+    "upload_chunk": [{"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a.png", "folder": "~/Downloads", "mimeType": "image/png", "data": "QUJD"}],
 }
 INVALID = {
     "tabs_list": [{"x": 1}],
@@ -74,13 +74,16 @@ INVALID = {
     "file_upload": [{"tabId": 1, "ref": "ref_1"}, {"tabId": 1, "ref": "ref_1", "uploads": []}, {"tabId": 1, "ref": "ref_1", "uploads": ["x"]},
                     {"tabId": 1, "uploads": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}, {"tabId": 1, "ref": "ref_1", "paths": ["/tmp/a"]},
                     {"tabId": 1, "ref": "ref_1", "uploads": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] * 11}],
-    "upload_chunk": [{"uploadId": "x", "index": 0, "total": 1, "name": "a", "mimeType": "a/b", "data": "QUJD"},
-                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 100, "total": 1, "name": "a", "mimeType": "a/b", "data": "QUJD"},
-                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a/b", "mimeType": "a/b", "data": "QUJD"},
-                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a\n", "mimeType": "a/b", "data": "QUJD"},
-                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "mimeType": "text", "data": "QUJD"},
-                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "mimeType": "a/b", "data": "!!!!"},
-                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "mimeType": "a/b", "data": "A" * 600004}],
+    "upload_chunk": [{"uploadId": "x", "index": 0, "total": 1, "name": "a", "folder": "~/Downloads", "mimeType": "a/b", "data": "QUJD"},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 100, "total": 1, "name": "a", "folder": "~/Downloads", "mimeType": "a/b", "data": "QUJD"},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a/b", "folder": "~/Downloads", "mimeType": "a/b", "data": "QUJD"},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a\n", "folder": "~/Downloads", "mimeType": "a/b", "data": "QUJD"},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "folder": "~/Downloads", "mimeType": "text", "data": "QUJD"},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "folder": "~/Downloads", "mimeType": "a/b", "data": "!!!!"},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "folder": "~/Downloads", "mimeType": "a/b", "data": "A" * 600004},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "mimeType": "a/b", "data": "QUJD"},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "folder": "~/x\n", "mimeType": "a/b", "data": "QUJD"},
+                     {"uploadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "index": 0, "total": 1, "name": "a", "folder": "", "mimeType": "a/b", "data": "QUJD"}],
 }
 
 
